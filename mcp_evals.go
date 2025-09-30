@@ -3,10 +3,11 @@ package evaluations
 import (
 	"context"
 	"fmt"
+	"os/exec"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/mark3labs/mcp-go/client"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type EvalClientConfig struct {
@@ -35,15 +36,20 @@ func NewEvalClient(config EvalClientConfig) *EvalClient {
 }
 
 func (ec *EvalClient) Run(ctx context.Context) error {
-	c, err := client.NewStdioMCPClient(
-		ec.config.Command,
-		ec.config.Env,
-		ec.config.Args...,
-	)
+	client := mcp.NewClient(&mcp.Implementation{Name: "mcp-client", Version: "v1.0.0"}, nil)
+	cmd := exec.Command(ec.config.Command, ec.config.Args...)
+
+	cmd.Env = ec.config.Env
+
+	transport := &mcp.CommandTransport{
+		Command: cmd,
+	}
+
+	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create MCP client: %w", err)
 	}
-	defer func() { _ = c.Close() }()
+	defer func() { _ = session.Close() }()
 
 	return nil
 }
