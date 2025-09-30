@@ -1,0 +1,49 @@
+image: "${BUILDKITE_HOSTED_REGISTRY_URL}/mcp-evals_base:latest"
+
+agents:
+  queue: "hosted"
+
+cache:
+  name: "golang-cache"
+  paths:
+    - "/gocache"
+    - "/gomodcache"
+  size: "100g"
+
+env:
+  GOCACHE: "/gocache"
+  GOMODCACHE: "/gomodcache"
+
+steps:
+  - # if: build.branch == "main"
+    if_changed: ".buildkite/Dockerfile.build"
+    id: base_image
+    label: ":docker: Create base image"
+    # use public base image to avoid recursion or broken base images blocking rebuilds
+    image: "buildkite/hosted-agent-base-images:ubuntu-jammy"
+    command: |
+      docker buildx build \
+        --no-cache \
+        --file .buildkite/Dockerfile.build \
+        --platform linux/amd64,linux/arm64 \
+        --tag "${BUILDKITE_HOSTED_REGISTRY_URL}/mcp-evals_base:latest" \
+        --progress plain \
+        --push .
+
+  - group: ":mag: QA"
+    id: quality_checks
+    depends_on: [base_image]
+    steps:
+      - key: lint
+        label: ":golangci-lint: lint"
+        command: golangci-lint run --verbose --timeout 3m
+
+      - key: test
+        label: ":go: test"
+        artifact_paths:
+          - cover-tree.svg
+          - coverage.out
+        commands:
+          - go test -coverprofile coverage.out -coverpkg=./... ./...
+          - go run github.com/nikolaydubina/go-cover-treemap -coverprofile coverage.out > cover-tree.svg
+          - echo '<details><summary>Coverage tree map</summary><img src="artifact://cover-tree.svg" alt="Test coverage tree map" width="70%"></details>' | buildkite-agent annotate --style "info"
