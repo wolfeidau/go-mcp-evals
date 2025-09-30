@@ -1,4 +1,4 @@
-image: "${BUILDKITE_HOSTED_REGISTRY_URL}/mcp-evals_base:latest"
+image: "${BUILDKITE_HOSTED_REGISTRY_URL}/go-mcp-evals_base:latest"
 
 agents:
   queue: "hosted"
@@ -16,7 +16,7 @@ env:
 
 steps:
   - # if: build.branch == "main"
-    if_changed: ".buildkite/Dockerfile.build"
+    # if_changed: ".buildkite/Dockerfile.build"
     id: base_image
     label: ":docker: Create base image"
     # use public base image to avoid recursion or broken base images blocking rebuilds
@@ -26,7 +26,7 @@ steps:
         --no-cache \
         --file .buildkite/Dockerfile.build \
         --platform linux/amd64,linux/arm64 \
-        --tag "${BUILDKITE_HOSTED_REGISTRY_URL}/mcp-evals_base:latest" \
+        --tag "${BUILDKITE_HOSTED_REGISTRY_URL}/go-mcp-evals_base:latest" \
         --progress plain \
         --push .
 
