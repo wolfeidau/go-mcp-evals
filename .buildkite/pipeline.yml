@@ -15,8 +15,7 @@ env:
   GOMODCACHE: "/gomodcache"
 
 steps:
-  - # if: build.branch == "main"
-    # if_changed: ".buildkite/Dockerfile.build"
+  - if_changed: ".buildkite/Dockerfile.build"
     id: base_image
     label: ":docker: Create base image"
     # use public base image to avoid recursion or broken base images blocking rebuilds

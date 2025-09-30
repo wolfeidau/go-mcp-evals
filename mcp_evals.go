@@ -19,19 +19,18 @@ type EvalClientConfig struct {
 }
 
 type EvalClient struct {
-	anthropic.Client
+	client anthropic.Client
 	config EvalClientConfig
 }
 
 func NewEvalClient(config EvalClientConfig) *EvalClient {
-
 	opts := []option.RequestOption{}
 	if config.APIKey != "" {
 		opts = append(opts, option.WithAPIKey(config.APIKey))
 	}
 
 	return &EvalClient{
-		Client: anthropic.NewClient(opts...), // uses ANTHROPIC_API_KEY from env
+		client: anthropic.NewClient(opts...), // uses ANTHROPIC_API_KEY from env
 	}
 }
 
