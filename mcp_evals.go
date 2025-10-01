@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -57,12 +58,16 @@ func NewEvalClient(config EvalClientConfig) *EvalClient {
 	}
 }
 
-func (ec *EvalClient) RunEval(ctx context.Context, prompt string) (*EvalResult, error) {
+// loadMCPSession creates an MCP client, connects to the server, and retrieves available tools
+func (ec *EvalClient) loadMCPSession(ctx context.Context) (*mcp.ClientSession, *mcp.ListToolsResult, error) {
 	mcpClient := mcp.NewClient(&mcp.Implementation{Name: "mcp-client", Version: "v1.0.0"}, nil)
 	// #nosec G204 - Command and args are provided by the library caller as part of EvalClientConfig
 	cmd := exec.Command(ec.config.Command, ec.config.Args...)
 
-	cmd.Env = ec.config.Env
+	// If custom env vars are provided, append them to the parent environment
+	if len(ec.config.Env) > 0 {
+		cmd.Env = append(os.Environ(), ec.config.Env...)
+	}
 
 	transport := &mcp.CommandTransport{
 		Command: cmd,
@@ -70,15 +75,25 @@ func (ec *EvalClient) RunEval(ctx context.Context, prompt string) (*EvalResult, 
 
 	session, err := mcpClient.Connect(ctx, transport, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create MCP client: %w", err)
+		return nil, nil, fmt.Errorf("failed to create MCP client: %w", err)
 	}
-	defer func() { _ = session.Close() }()
 
 	// get all the tools
 	toolsResp, err := session.ListTools(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list tools: %w", err)
+		_ = session.Close()
+		return nil, nil, fmt.Errorf("failed to list tools: %w", err)
 	}
+
+	return session, toolsResp, nil
+}
+
+func (ec *EvalClient) RunEval(ctx context.Context, prompt string) (*EvalResult, error) {
+	session, toolsResp, err := ec.loadMCPSession(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = session.Close() }()
 
 	// convert the tools to the format expected by the anthropic model
 	toolParams := make([]anthropic.ToolParam, 0, len(toolsResp.Tools))
@@ -257,4 +272,37 @@ type GradeResult struct {
 	Clarity        int    `json:"clarity"`
 	Reasoning      int    `json:"reasoning"`
 	OverallComment string `json:"overall_comments"`
+}
+
+// Eval represents a single evaluation test case
+type Eval struct {
+	Name           string `yaml:"name" json:"name"`
+	Description    string `yaml:"description,omitempty" json:"description,omitempty"`
+	Prompt         string `yaml:"prompt" json:"prompt"`
+	ExpectedResult string `yaml:"expected_result,omitempty" json:"expected_result,omitempty"`
+}
+
+// EvalRunResult combines the eval configuration with its execution results
+type EvalRunResult struct {
+	Eval   Eval
+	Result *EvalResult
+	Grade  *GradeResult
+	Error  error
+}
+
+// MCPServerConfig defines how to start the MCP server
+type MCPServerConfig struct {
+	Command string   `yaml:"command" json:"command"`
+	Args    []string `yaml:"args,omitempty" json:"args,omitempty"`
+	Env     []string `yaml:"env,omitempty" json:"env,omitempty"`
+}
+
+// EvalConfig represents the top-level configuration for running evaluations
+type EvalConfig struct {
+	Model     string          `yaml:"model" json:"model"`
+	Timeout   string          `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	MaxSteps  int             `yaml:"max_steps,omitempty" json:"max_steps,omitempty"`
+	MaxTokens int             `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
+	MCPServer MCPServerConfig `yaml:"mcp_server" json:"mcp_server"`
+	Evals     []Eval          `yaml:"evals" json:"evals"`
 }
