@@ -27,7 +27,7 @@ func TestE2E_BasicEvaluation(t *testing.T) {
 		Command: serverPath,
 		Args:    []string{},
 		Env:     []string{},
-		Model:   "claude-3-5-sonnet-20241022",
+		Model:   "claude-3-5-sonnet-20241022", // claude-sonnet-4-0
 	}
 
 	client := NewEvalClient(config)
@@ -71,6 +71,9 @@ func TestE2E_BasicEvaluation(t *testing.T) {
 	t.Logf("Grade: Accuracy=%d, Completeness=%d, Relevance=%d, Clarity=%d, Reasoning=%d",
 		evalRunResult.Grade.Accuracy, evalRunResult.Grade.Completeness, evalRunResult.Grade.Relevance,
 		evalRunResult.Grade.Clarity, evalRunResult.Grade.Reasoning)
+
+	// Validate trace data
+	validateTrace(t, evalRunResult.Trace)
 }
 
 func TestE2E_MultipleTools(t *testing.T) {
@@ -132,6 +135,9 @@ func TestE2E_MultipleTools(t *testing.T) {
 	t.Logf("Grade: Accuracy=%d, Completeness=%d, Relevance=%d, Clarity=%d, Reasoning=%d",
 		evalRunResult.Grade.Accuracy, evalRunResult.Grade.Completeness, evalRunResult.Grade.Relevance,
 		evalRunResult.Grade.Clarity, evalRunResult.Grade.Reasoning)
+
+	// Validate trace data
+	validateTrace(t, evalRunResult.Trace)
 }
 
 func TestE2E_EnvironmentVariables(t *testing.T) {
@@ -194,6 +200,9 @@ func TestE2E_EnvironmentVariables(t *testing.T) {
 	t.Logf("Grade: Accuracy=%d, Completeness=%d, Relevance=%d, Clarity=%d, Reasoning=%d",
 		evalRunResult.Grade.Accuracy, evalRunResult.Grade.Completeness, evalRunResult.Grade.Relevance,
 		evalRunResult.Grade.Clarity, evalRunResult.Grade.Reasoning)
+
+	// Validate trace data
+	validateTrace(t, evalRunResult.Trace)
 }
 
 func TestE2E_GradingScores(t *testing.T) {
@@ -254,6 +263,9 @@ func TestE2E_GradingScores(t *testing.T) {
 	t.Logf("  Clarity: %d", evalRunResult.Grade.Clarity)
 	t.Logf("  Reasoning: %d", evalRunResult.Grade.Reasoning)
 	t.Logf("  Overall: %s", evalRunResult.Grade.OverallComment)
+
+	// Validate trace data
+	validateTrace(t, evalRunResult.Trace)
 }
 
 // buildTestServer builds the test MCP server and returns the path to the binary
@@ -345,6 +357,9 @@ func TestE2E_LoadConfigAndRunEvals(t *testing.T) {
 		t.Logf("  Grade: Accuracy=%d, Completeness=%d, Relevance=%d, Clarity=%d, Reasoning=%d",
 			result.Grade.Accuracy, result.Grade.Completeness, result.Grade.Relevance,
 			result.Grade.Clarity, result.Grade.Reasoning)
+
+		// Validate trace data
+		validateTrace(t, result.Trace)
 	}
 
 	// Verify specific results based on eval names
@@ -400,4 +415,117 @@ func validateGrade(t *testing.T, grade *GradeResult) {
 	if grade.OverallComment == "" {
 		t.Error("overall_comments is empty")
 	}
+}
+
+// validateTrace validates that an EvalTrace has all required data
+func validateTrace(t *testing.T, trace *EvalTrace) {
+	t.Helper()
+
+	if trace == nil {
+		t.Fatal("Expected non-nil trace")
+	}
+
+	// Validate basic metrics
+	if trace.StepCount == 0 {
+		t.Error("Expected at least one step in trace")
+	}
+
+	if len(trace.Steps) != trace.StepCount {
+		t.Errorf("Step count mismatch: StepCount=%d but len(Steps)=%d", trace.StepCount, len(trace.Steps))
+	}
+
+	if trace.TotalInputTokens == 0 {
+		t.Error("Expected non-zero input tokens")
+	}
+
+	if trace.TotalOutputTokens == 0 {
+		t.Error("Expected non-zero output tokens")
+	}
+
+	if trace.TotalDuration == 0 {
+		t.Error("Expected non-zero duration")
+	}
+
+	// Validate each step
+	for i, step := range trace.Steps {
+		if step.StepNumber != i+1 {
+			t.Errorf("Step %d has wrong step number: %d", i, step.StepNumber)
+		}
+
+		if step.StartTime.IsZero() {
+			t.Errorf("Step %d has zero start time", i)
+		}
+
+		if step.EndTime.IsZero() {
+			t.Errorf("Step %d has zero end time", i)
+		}
+
+		if step.Duration == 0 {
+			t.Errorf("Step %d has zero duration", i)
+		}
+
+		if step.StopReason == "" {
+			t.Errorf("Step %d has empty stop reason", i)
+		}
+
+		// Validate tool calls if present
+		for j, tc := range step.ToolCalls {
+			if tc.ToolID == "" {
+				t.Errorf("Step %d, tool call %d has empty tool ID", i, j)
+			}
+
+			if tc.ToolName == "" {
+				t.Errorf("Step %d, tool call %d has empty tool name", i, j)
+			}
+
+			if tc.Duration == 0 {
+				t.Errorf("Step %d, tool call %d has zero duration", i, j)
+			}
+
+			if len(tc.Input) == 0 {
+				t.Errorf("Step %d, tool call %d has empty input", i, j)
+			}
+
+			if len(tc.Output) == 0 {
+				t.Errorf("Step %d, tool call %d has empty output", i, j)
+			}
+		}
+	}
+
+	// Validate grading trace
+	if trace.Grading == nil {
+		t.Error("Expected non-nil grading trace")
+		return
+	}
+
+	if trace.Grading.UserPrompt == "" {
+		t.Error("Grading trace has empty user prompt")
+	}
+
+	if trace.Grading.ModelResponse == "" {
+		t.Error("Grading trace has empty model response")
+	}
+
+	if trace.Grading.GradingPrompt == "" {
+		t.Error("Grading trace has empty grading prompt")
+	}
+
+	if trace.Grading.RawGradingOutput == "" {
+		t.Error("Grading trace has empty raw grading output")
+	}
+
+	if trace.Grading.InputTokens == 0 {
+		t.Error("Grading trace has zero input tokens")
+	}
+
+	if trace.Grading.OutputTokens == 0 {
+		t.Error("Grading trace has zero output tokens")
+	}
+
+	if trace.Grading.Duration == 0 {
+		t.Error("Grading trace has zero duration")
+	}
+
+	t.Logf("Trace summary: %d steps, %d tool calls, %d total tokens, duration: %v",
+		trace.StepCount, trace.ToolCallCount, trace.TotalInputTokens+trace.TotalOutputTokens, trace.TotalDuration)
 }

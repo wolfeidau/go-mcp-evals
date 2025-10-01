@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -100,8 +101,77 @@ func (ec *EvalClient) loadMCPSession(ctx context.Context) (*mcp.ClientSession, *
 	return session, toolsResp, nil
 }
 
+// executeAndTraceToolCall executes a single MCP tool call and captures complete trace data
+func (ec *EvalClient) executeAndTraceToolCall(
+	ctx context.Context,
+	toolUseBlock anthropic.ToolUseBlock,
+	session *mcp.ClientSession,
+) ToolCall {
+	toolCall := ToolCall{
+		ToolID:    toolUseBlock.ID,
+		ToolName:  toolUseBlock.Name,
+		StartTime: time.Now(),
+	}
+
+	// Capture input
+	if inputJSON, err := json.Marshal(toolUseBlock.Input); err == nil {
+		toolCall.Input = inputJSON
+	}
+
+	// Execute MCP tool call
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      toolUseBlock.Name,
+		Arguments: toolUseBlock.Input,
+	})
+
+	toolCall.EndTime = time.Now()
+	toolCall.Duration = toolCall.EndTime.Sub(toolCall.StartTime)
+
+	if err != nil {
+		toolCall.Success = false
+		toolCall.Error = err.Error()
+		// Create error output in JSON format for consistency
+		errorOutput := map[string]string{"error": err.Error()}
+		if outputJSON, marshalErr := json.Marshal(errorOutput); marshalErr == nil {
+			toolCall.Output = outputJSON
+		}
+	} else {
+		toolCall.Success = true
+		// Convert MCP result to structured output
+		var contentParts []string
+		for _, content := range result.Content {
+			switch c := content.(type) {
+			case *mcp.TextContent:
+				contentParts = append(contentParts, c.Text)
+			case *mcp.ImageContent:
+				contentParts = append(contentParts, fmt.Sprintf("[Image: %s]", c.MIMEType))
+			case *mcp.EmbeddedResource:
+				contentParts = append(contentParts, fmt.Sprintf("[Resource: %s]", c.Resource.URI))
+			}
+		}
+		resultContent := strings.Join(contentParts, "\n")
+
+		// Store as JSON string for trace output
+		outputData := map[string]string{"result": resultContent}
+		if outputJSON, marshalErr := json.Marshal(outputData); marshalErr == nil {
+			toolCall.Output = outputJSON
+		}
+	}
+
+	return toolCall
+}
+
 func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, error) {
-	result := &EvalRunResult{Eval: eval}
+	overallStart := time.Now()
+	trace := &EvalTrace{
+		Steps: make([]AgenticStep, 0, ec.config.MaxSteps),
+	}
+
+	result := &EvalRunResult{
+		Eval:  eval,
+		Trace: trace,
+	}
+
 	session, toolsResp, err := ec.loadMCPSession(ctx)
 	if err != nil {
 		return nil, err
@@ -146,8 +216,17 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 
 	var finalText strings.Builder
 
-	// Agentic loop
+	// Agentic loop with tracing
+	stepNumber := 0
 	for range ec.config.MaxSteps {
+		stepNumber++
+		stepStart := time.Now()
+		step := AgenticStep{
+			StepNumber: stepNumber,
+			StartTime:  stepStart,
+			ToolCalls:  make([]ToolCall, 0),
+		}
+
 		stream := ec.client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
 			Model:     anthropic.Model(ec.config.Model),
 			MaxTokens: int64(ec.config.MaxTokens),
@@ -164,6 +243,8 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 		for stream.Next() {
 			event := stream.Current()
 			if err = message.Accumulate(event); err != nil {
+				step.Error = err.Error()
+				trace.Steps = append(trace.Steps, step)
 				return nil, fmt.Errorf("failed to accumulate event: %w", err)
 			}
 
@@ -173,7 +254,21 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 		}
 
 		if err = stream.Err(); err != nil {
+			step.Error = err.Error()
+			trace.Steps = append(trace.Steps, step)
 			return nil, fmt.Errorf("streaming error: %w", err)
+		}
+
+		// Record step data from message
+		step.StopReason = string(message.StopReason)
+		step.InputTokens = int(message.Usage.InputTokens)
+		step.OutputTokens = int(message.Usage.OutputTokens)
+
+		// Extract text content
+		for _, block := range message.Content {
+			if textBlock, ok := block.AsAny().(anthropic.TextBlock); ok {
+				step.ModelResponse += textBlock.Text
+			}
 		}
 
 		// Add assistant message to history
@@ -181,11 +276,17 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 
 		// Check stop reason
 		if message.StopReason == anthropic.StopReasonEndTurn {
+			step.EndTime = time.Now()
+			step.Duration = step.EndTime.Sub(stepStart)
+			trace.Steps = append(trace.Steps, step)
 			// Model finished without tool use
 			break
 		}
 
 		if message.StopReason != anthropic.StopReasonToolUse {
+			step.EndTime = time.Now()
+			step.Duration = step.EndTime.Sub(stepStart)
+			trace.Steps = append(trace.Steps, step)
 			// Unexpected stop reason
 			break
 		}
@@ -194,40 +295,29 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 		var toolResults []anthropic.ContentBlockParamUnion
 		for _, block := range message.Content {
 			if variant, ok := block.AsAny().(anthropic.ToolUseBlock); ok {
-				// Call the MCP tool
-				result, err := session.CallTool(ctx, &mcp.CallToolParams{
-					Name:      block.Name,
-					Arguments: variant.Input,
-				})
+				// Execute and trace tool call
+				toolCall := ec.executeAndTraceToolCall(ctx, variant, session)
+				step.ToolCalls = append(step.ToolCalls, toolCall)
 
+				// Build result block for message history
 				var resultContent string
-				isError := false
-				if err != nil {
-					resultContent = fmt.Sprintf("Error calling tool: %v", err)
-					isError = true
+				if toolCall.Success {
+					resultContent = string(toolCall.Output)
 				} else {
-					// Convert MCP result to string
-					var contentParts []string
-					for _, content := range result.Content {
-						switch c := content.(type) {
-						case *mcp.TextContent:
-							contentParts = append(contentParts, c.Text)
-						case *mcp.ImageContent:
-							contentParts = append(contentParts, fmt.Sprintf("[Image: %s]", c.MIMEType))
-						case *mcp.EmbeddedResource:
-							contentParts = append(contentParts, fmt.Sprintf("[Resource: %s]", c.Resource.URI))
-						}
-					}
-					resultContent = strings.Join(contentParts, "\n")
+					resultContent = fmt.Sprintf("Error calling tool: %s", toolCall.Error)
 				}
 
 				toolResults = append(toolResults, anthropic.NewToolResultBlock(
 					block.ID,
 					resultContent,
-					isError,
+					!toolCall.Success,
 				))
 			}
 		}
+
+		step.EndTime = time.Now()
+		step.Duration = step.EndTime.Sub(stepStart)
+		trace.Steps = append(trace.Steps, step)
 
 		// If no tool results, we're done
 		if len(toolResults) == 0 {
@@ -238,19 +328,33 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 		messages = append(messages, anthropic.NewUserMessage(toolResults...))
 	}
 
+	// Calculate trace metrics
+	trace.StepCount = len(trace.Steps)
+	for _, step := range trace.Steps {
+		trace.TotalInputTokens += step.InputTokens
+		trace.TotalOutputTokens += step.OutputTokens
+		trace.ToolCallCount += len(step.ToolCalls)
+	}
+
 	evalResult := &EvalResult{
 		Prompt:      eval.Prompt,
 		RawResponse: finalText.String(),
 	}
 	result.Result = evalResult
 
-	// Auto-grade the result
-	result.Grade, err = ec.grade(ctx, evalResult)
+	// Auto-grade the result with tracing
+	grade, gradingTrace, err := ec.gradeWithTrace(ctx, eval, evalResult)
 	if err != nil {
 		// Don't fail the entire eval if grading fails, just log it
 		result.Error = fmt.Errorf("grading failed: %w", err)
-		return result, nil
+		trace.Grading = gradingTrace // Still include partial trace if available
+	} else {
+		result.Grade = grade
+		trace.Grading = gradingTrace
 	}
+
+	// Finalize trace timing
+	trace.TotalDuration = time.Since(overallStart)
 
 	return result, nil
 }
@@ -277,12 +381,22 @@ func (ec *EvalClient) RunEvals(ctx context.Context, evals []Eval) ([]EvalRunResu
 	return results, nil
 }
 
-func (ec *EvalClient) grade(ctx context.Context, evalResult *EvalResult) (*GradeResult, error) {
+// gradeWithTrace grades an evaluation result and returns complete trace data
+func (ec *EvalClient) gradeWithTrace(ctx context.Context, eval Eval, evalResult *EvalResult) (*GradeResult, *GradingTrace, error) {
+	trace := &GradingTrace{
+		UserPrompt:     eval.Prompt,
+		ModelResponse:  evalResult.RawResponse,
+		ExpectedResult: eval.ExpectedResult,
+		StartTime:      time.Now(),
+	}
 
-	// use a string template to create the grading prompt
+	// Build grading prompt
 	gradingPrompt := fmt.Sprintf(`Here is the user input: %s
 Here is the LLM's answer: %s`, evalResult.Prompt, evalResult.RawResponse)
 
+	trace.GradingPrompt = gradingPrompt
+
+	// Execute grading
 	resp, err := ec.client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     anthropic.Model(ec.config.Model),
 		MaxTokens: 1000,
@@ -293,16 +407,29 @@ Here is the LLM's answer: %s`, evalResult.Prompt, evalResult.RawResponse)
 			anthropic.NewUserMessage(anthropic.NewTextBlock(gradingPrompt)),
 		},
 	})
+
+	trace.EndTime = time.Now()
+	trace.Duration = trace.EndTime.Sub(trace.StartTime)
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to get grading response: %w", err)
+		trace.Error = err.Error()
+		return nil, trace, fmt.Errorf("failed to get grading response: %w", err)
 	}
 
+	// Capture raw response and token usage
+	rawResponse := resp.Content[0].AsAny().(anthropic.TextBlock).Text
+	trace.RawGradingOutput = rawResponse
+	trace.InputTokens = int(resp.Usage.InputTokens)
+	trace.OutputTokens = int(resp.Usage.OutputTokens)
+
+	// Parse grade result
 	var gradeResult GradeResult
-	if err := json.Unmarshal([]byte(resp.Content[0].AsAny().(anthropic.TextBlock).Text), &gradeResult); err != nil {
-		return nil, fmt.Errorf("failed to parse grading response: %w", err)
+	if err := json.Unmarshal([]byte(rawResponse), &gradeResult); err != nil {
+		trace.Error = err.Error()
+		return nil, trace, fmt.Errorf("failed to parse grading response: %w", err)
 	}
 
-	return &gradeResult, nil
+	return &gradeResult, trace, nil
 }
 
 type EvalResult struct {
@@ -333,6 +460,60 @@ type EvalRunResult struct {
 	Result *EvalResult
 	Grade  *GradeResult
 	Error  error
+	Trace  *EvalTrace // Complete execution trace for debugging and analysis
+}
+
+// EvalTrace captures complete execution history of an evaluation run
+type EvalTrace struct {
+	Steps             []AgenticStep `json:"steps"`               // Each step in the agentic loop
+	Grading           *GradingTrace `json:"grading,omitempty"`   // Grading interaction details
+	TotalDuration     time.Duration `json:"total_duration"`      // Total execution time
+	TotalInputTokens  int           `json:"total_input_tokens"`  // Sum of input tokens across all steps
+	TotalOutputTokens int           `json:"total_output_tokens"` // Sum of output tokens across all steps
+	StepCount         int           `json:"step_count"`          // Number of agentic steps executed
+	ToolCallCount     int           `json:"tool_call_count"`     // Total number of tool calls made
+}
+
+// AgenticStep records a single iteration of the agentic loop
+type AgenticStep struct {
+	StepNumber    int           `json:"step_number"`     // 1-indexed step number
+	StartTime     time.Time     `json:"start_time"`      // When this step started
+	EndTime       time.Time     `json:"end_time"`        // When this step completed
+	Duration      time.Duration `json:"duration"`        // Step execution duration
+	ModelResponse string        `json:"model_response"`  // Text content from assistant
+	StopReason    string        `json:"stop_reason"`     // end_turn, tool_use, max_tokens, etc.
+	ToolCalls     []ToolCall    `json:"tool_calls"`      // Tools executed in this step
+	InputTokens   int           `json:"input_tokens"`    // Input tokens for this step
+	OutputTokens  int           `json:"output_tokens"`   // Output tokens for this step
+	Error         string        `json:"error,omitempty"` // Error message if step failed
+}
+
+// ToolCall captures details of a single tool invocation
+type ToolCall struct {
+	ToolID    string          `json:"tool_id"`         // Unique ID from content block
+	ToolName  string          `json:"tool_name"`       // MCP tool name
+	StartTime time.Time       `json:"start_time"`      // When tool execution started
+	EndTime   time.Time       `json:"end_time"`        // When tool execution completed
+	Duration  time.Duration   `json:"duration"`        // Tool execution duration
+	Input     json.RawMessage `json:"input"`           // Tool arguments as JSON
+	Output    json.RawMessage `json:"output"`          // Tool result as JSON
+	Success   bool            `json:"success"`         // Whether tool executed successfully
+	Error     string          `json:"error,omitempty"` // Error message if tool failed
+}
+
+// GradingTrace records the grading interaction with the LLM
+type GradingTrace struct {
+	UserPrompt       string        `json:"user_prompt"`        // Original eval prompt
+	ModelResponse    string        `json:"model_response"`     // Model's answer being graded
+	ExpectedResult   string        `json:"expected_result"`    // Expected result description
+	GradingPrompt    string        `json:"grading_prompt"`     // Full prompt sent to grader
+	RawGradingOutput string        `json:"raw_grading_output"` // Complete LLM response before parsing
+	StartTime        time.Time     `json:"start_time"`         // When grading started
+	EndTime          time.Time     `json:"end_time"`           // When grading completed
+	Duration         time.Duration `json:"duration"`           // Grading duration
+	InputTokens      int           `json:"input_tokens"`       // Input tokens for grading
+	OutputTokens     int           `json:"output_tokens"`      // Output tokens for grading
+	Error            string        `json:"error,omitempty"`    // Error message if grading failed
 }
 
 // MCPServerConfig defines how to start the MCP server
