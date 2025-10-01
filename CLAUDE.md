@@ -86,3 +86,11 @@ When creating any documentation (README files, code comments, design docs), writ
 - Focus on operational excellence, security, and scalability considerations
 - Always include implementation details and edge cases
 - Use the passive voice sparingly; prefer active, direct statements
+
+## Breaking Changes Policy
+
+**Pre-1.0 Development**: This library is currently in pre-1.0 development phase, which means:
+
+- **Breaking changes are acceptable** and expected as the API evolves
+- **All breaking changes must be clearly documented** in commit messages and release notes
+- **Major API changes should be discussed** before implementation when possible
