@@ -70,3 +70,19 @@ go test -cover ./...
 - `Args`: Arguments for the MCP server command
 - `Env`: Environment variables for the MCP server
 - `Model`: Anthropic model ID to use (e.g., "claude-3-5-sonnet-20241022")
+
+## Code Style
+- **Logging**: ALWAYS use `"github.com/rs/zerolog/log"` for all logging operations
+- Error handling: return errors up the stack, log at top level
+- Package names: lowercase, descriptive (buildkite, commands, trace, tokens)
+- Use contexts for cancellation
+
+## Documentation Style
+When creating any documentation (README files, code comments, design docs), write in the style of an Amazon engineer:
+- Start with the customer problem and work backwards
+- Use clear, concise, and data-driven language
+- Include specific examples and concrete details
+- Structure documents with clear headings and bullet points
+- Focus on operational excellence, security, and scalability considerations
+- Always include implementation details and edge cases
+- Use the passive voice sparingly; prefer active, direct statements

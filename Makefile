@@ -1,53 +1,81 @@
-.PHONY: test test-e2e build lint lint-check clean build-test-server check
+.DEFAULT_GOAL := help
 
-# Run unit tests
-test:
+.PHONY: help
+help: ## Show this help message
+	@echo 'Usage: make [target]'
+	@echo ''
+	@echo 'Available targets:'
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+.PHONY: test
+test: ## Run unit tests
 	go test -v ./...
 
-# Run e2e tests with API key from 1Password
-# Update the op read path to match your 1Password structure
-test-e2e:
+.PHONY: test-e2e
+test-e2e: ## Run e2e tests with API key from 1Password
 	@echo "Fetching ANTHROPIC_API_KEY from 1Password..."
 	@ANTHROPIC_API_KEY=$$(op item get "Anthropic API Key" --field credential --reveal) \
 		go test -v -tags=e2e -timeout=5m ./...
 
-# Run e2e tests with manual API key (alternative to 1Password)
-test-e2e-manual:
+.PHONY: test-e2e-manual
+test-e2e-manual: ## Run e2e tests with manual API key (set ANTHROPIC_API_KEY)
 	@if [ -z "$$ANTHROPIC_API_KEY" ]; then \
 		echo "Error: ANTHROPIC_API_KEY environment variable is not set"; \
 		exit 1; \
 	fi
 	go test -v -tags=e2e -timeout=5m ./...
 
-# Build CLI
-build:
+.PHONY: test-coverage
+test-coverage: ## Run tests with coverage
+	go test -cover ./...
+
+.PHONY: test-coverage-html
+test-coverage-html: ## Generate HTML coverage report
+	go test -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report generated at coverage.html"
+
+.PHONY: test-build
+test-build: ## Build test binary
+	go test -c -o bin/mcp-evals.test .
+
+.PHONY: build
+build: ## Build CLI binary
 	mkdir -p bin
 	go build -o bin/mcp-evals ./cmd/mcp-evals
 
-# Run linter with auto-fix
-lint:
-	golangci-lint run --fix
-
-# Run linter without fixes (for CI)
-lint-check:
-	golangci-lint run
-
-# Run tests with coverage
-test-coverage:
-	go test -cover ./...
-
-# Clean build artifacts
-clean:
-	rm -rf bin/
-	go clean -testcache
-
-# Build test server (for manual testing)
-build-test-server:
+.PHONY: build-test-server
+build-test-server: ## Build test server for manual testing
 	mkdir -p bin
 	go build -o bin/test-server ./testdata/mcp-test-server
 
-# Run all checks (lint + test)
-check: lint-check test
+.PHONY: lint
+lint: ## Run golangci-lint (no auto-fix)
+	golangci-lint run
 
-# Run all checks including e2e
-check-all: lint-check test test-e2e
+.PHONY: lint-fix
+lint-fix: ## Run golangci-lint with auto-fix
+	golangci-lint run --fix
+
+.PHONY: fmt
+fmt: ## Format Go code
+	go fmt ./...
+
+.PHONY: clean
+clean: ## Clean build artifacts
+	rm -rf bin/
+	rm -f coverage.out coverage.html
+	go clean -testcache
+
+.PHONY: install
+install: ## Install CLI to GOPATH/bin
+	go install ./cmd/mcp-evals
+
+.PHONY: check
+check: lint test ## Run all checks (lint + test)
+
+.PHONY: check-all
+check-all: lint test test-e2e ## Run all checks including e2e
+
+.PHONY: all
+all: fmt lint test build ## Run fmt, lint, test, and build

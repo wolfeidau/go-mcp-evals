@@ -36,11 +36,13 @@ const (
 )
 
 type EvalClientConfig struct {
-	APIKey  string
-	Command string
-	Args    []string
-	Env     []string
-	Model   string
+	APIKey    string
+	Command   string
+	Args      []string
+	Env       []string
+	Model     string
+	MaxSteps  int
+	MaxTokens int
 }
 
 type EvalClient struct {
@@ -52,6 +54,14 @@ func NewEvalClient(config EvalClientConfig) *EvalClient {
 	opts := []option.RequestOption{}
 	if config.APIKey != "" {
 		opts = append(opts, option.WithAPIKey(config.APIKey))
+	}
+
+	// Apply defaults for optional fields
+	if config.MaxSteps <= 0 {
+		config.MaxSteps = 10
+	}
+	if config.MaxTokens <= 0 {
+		config.MaxTokens = 4096
 	}
 
 	return &EvalClient{
@@ -107,7 +117,7 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 			// MCP uses JSON Schema, convert to map
 			schemaBytes, _ := json.Marshal(tool.InputSchema)
 			var schema map[string]any
-			if err := json.Unmarshal(schemaBytes, &schema); err == nil {
+			if err = json.Unmarshal(schemaBytes, &schema); err == nil {
 				if props, ok := schema["properties"].(map[string]any); ok {
 					properties = props
 				}
@@ -134,14 +144,13 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 		anthropic.NewUserMessage(anthropic.NewTextBlock(eval.Prompt)),
 	}
 
-	const maxSteps = 10
 	var finalText strings.Builder
 
 	// Agentic loop
-	for step := 0; step < maxSteps; step++ {
+	for range ec.config.MaxSteps {
 		stream := ec.client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
 			Model:     anthropic.Model(ec.config.Model),
-			MaxTokens: 4096,
+			MaxTokens: int64(ec.config.MaxTokens),
 			System: []anthropic.TextBlockParam{
 				{Text: SystemPrompt},
 			},
@@ -154,7 +163,7 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 		// Process the stream
 		for stream.Next() {
 			event := stream.Current()
-			if err := message.Accumulate(event); err != nil {
+			if err = message.Accumulate(event); err != nil {
 				return nil, fmt.Errorf("failed to accumulate event: %w", err)
 			}
 
@@ -163,7 +172,7 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 			}
 		}
 
-		if err := stream.Err(); err != nil {
+		if err = stream.Err(); err != nil {
 			return nil, fmt.Errorf("streaming error: %w", err)
 		}
 
@@ -236,13 +245,12 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 	result.Result = evalResult
 
 	// Auto-grade the result
-	grade, err := ec.grade(ctx, evalResult)
+	result.Grade, err = ec.grade(ctx, evalResult)
 	if err != nil {
 		// Don't fail the entire eval if grading fails, just log it
 		result.Error = fmt.Errorf("grading failed: %w", err)
 		return result, nil
 	}
-	result.Grade = grade
 
 	return result, nil
 }
