@@ -36,33 +36,41 @@ func TestE2E_BasicEvaluation(t *testing.T) {
 	defer cancel()
 
 	// Run evaluation
-	evalResult, err := client.RunEval(ctx, "What is 5 plus 3?")
+	evalRunResult, err := client.RunEval(ctx, Eval{
+		Name:           "basic_addition",
+		Description:    "Test basic addition",
+		Prompt:         "What is 5 plus 3?",
+		ExpectedResult: "Should return 8",
+	})
 	if err != nil {
 		t.Fatalf("RunEval failed: %v", err)
 	}
 
+	// Check for errors in the result
+	if evalRunResult.Error != nil {
+		t.Fatalf("Eval execution error: %v", evalRunResult.Error)
+	}
+
 	// Verify result
-	if evalResult.RawResponse == "" {
+	if evalRunResult.Result == nil || evalRunResult.Result.RawResponse == "" {
 		t.Fatal("Expected non-empty result")
 	}
 
 	// Check if answer contains expected value
-	if !strings.Contains(evalResult.RawResponse, "8") {
-		t.Errorf("Expected answer to contain '8', got: %s", evalResult.RawResponse)
+	if !strings.Contains(evalRunResult.Result.RawResponse, "8") {
+		t.Errorf("Expected answer to contain '8', got: %s", evalRunResult.Result.RawResponse)
 	}
 
-	t.Logf("Evaluation result: %s", evalResult.RawResponse)
+	t.Logf("Evaluation result: %s", evalRunResult.Result.RawResponse)
 
-	// Grade the result
-	grade, err := client.Grade(ctx, evalResult)
-	if err != nil {
-		t.Fatalf("Grade failed: %v", err)
+	// Validate grade structure (auto-graded)
+	if evalRunResult.Grade == nil {
+		t.Fatal("Expected grade to be auto-generated")
 	}
-
-	// Validate grade structure
-	validateGrade(t, grade)
+	validateGrade(t, evalRunResult.Grade)
 	t.Logf("Grade: Accuracy=%d, Completeness=%d, Relevance=%d, Clarity=%d, Reasoning=%d",
-		grade.Accuracy, grade.Completeness, grade.Relevance, grade.Clarity, grade.Reasoning)
+		evalRunResult.Grade.Accuracy, evalRunResult.Grade.Completeness, evalRunResult.Grade.Relevance,
+		evalRunResult.Grade.Clarity, evalRunResult.Grade.Reasoning)
 }
 
 func TestE2E_MultipleTools(t *testing.T) {
@@ -89,33 +97,41 @@ func TestE2E_MultipleTools(t *testing.T) {
 	defer cancel()
 
 	// Run evaluation with multiple tools
-	evalResult, err := client.RunEval(ctx, "Echo the message 'hello world' and tell me what time it is")
+	evalRunResult, err := client.RunEval(ctx, Eval{
+		Name:           "multiple_tools",
+		Description:    "Test using multiple tools in sequence",
+		Prompt:         "Echo the message 'hello world' and tell me what time it is",
+		ExpectedResult: "Should echo 'hello world' and provide current time",
+	})
 	if err != nil {
 		t.Fatalf("RunEval failed: %v", err)
 	}
 
+	// Check for errors in the result
+	if evalRunResult.Error != nil {
+		t.Fatalf("Eval execution error: %v", evalRunResult.Error)
+	}
+
 	// Verify result
-	if evalResult.RawResponse == "" {
+	if evalRunResult.Result == nil || evalRunResult.Result.RawResponse == "" {
 		t.Fatal("Expected non-empty result")
 	}
 
 	// Check if answer contains expected content
-	if !strings.Contains(strings.ToLower(evalResult.RawResponse), "hello world") {
-		t.Errorf("Expected answer to contain 'hello world', got: %s", evalResult.RawResponse)
+	if !strings.Contains(strings.ToLower(evalRunResult.Result.RawResponse), "hello world") {
+		t.Errorf("Expected answer to contain 'hello world', got: %s", evalRunResult.Result.RawResponse)
 	}
 
-	t.Logf("Evaluation result: %s", evalResult.RawResponse)
+	t.Logf("Evaluation result: %s", evalRunResult.Result.RawResponse)
 
-	// Grade the result
-	grade, err := client.Grade(ctx, evalResult)
-	if err != nil {
-		t.Fatalf("Grade failed: %v", err)
+	// Validate grade structure (auto-graded)
+	if evalRunResult.Grade == nil {
+		t.Fatal("Expected grade to be auto-generated")
 	}
-
-	// Validate grade structure
-	validateGrade(t, grade)
+	validateGrade(t, evalRunResult.Grade)
 	t.Logf("Grade: Accuracy=%d, Completeness=%d, Relevance=%d, Clarity=%d, Reasoning=%d",
-		grade.Accuracy, grade.Completeness, grade.Relevance, grade.Clarity, grade.Reasoning)
+		evalRunResult.Grade.Accuracy, evalRunResult.Grade.Completeness, evalRunResult.Grade.Relevance,
+		evalRunResult.Grade.Clarity, evalRunResult.Grade.Reasoning)
 }
 
 func TestE2E_EnvironmentVariables(t *testing.T) {
@@ -143,33 +159,41 @@ func TestE2E_EnvironmentVariables(t *testing.T) {
 	defer cancel()
 
 	// Run evaluation that requires checking an environment variable
-	evalResult, err := client.RunEval(ctx, "What is the value of the TEST_API_TOKEN environment variable?")
+	evalRunResult, err := client.RunEval(ctx, Eval{
+		Name:           "environment_variables",
+		Description:    "Test accessing custom environment variables",
+		Prompt:         "What is the value of the TEST_API_TOKEN environment variable?",
+		ExpectedResult: "Should return '" + testToken + "'",
+	})
 	if err != nil {
 		t.Fatalf("RunEval failed: %v", err)
 	}
 
+	// Check for errors in the result
+	if evalRunResult.Error != nil {
+		t.Fatalf("Eval execution error: %v", evalRunResult.Error)
+	}
+
 	// Verify result contains the token value
-	if evalResult.RawResponse == "" {
+	if evalRunResult.Result == nil || evalRunResult.Result.RawResponse == "" {
 		t.Fatal("Expected non-empty result")
 	}
 
 	// Check if answer contains the test token
-	if !strings.Contains(evalResult.RawResponse, testToken) {
-		t.Errorf("Expected answer to contain test token '%s', got: %s", testToken, evalResult.RawResponse)
+	if !strings.Contains(evalRunResult.Result.RawResponse, testToken) {
+		t.Errorf("Expected answer to contain test token '%s', got: %s", testToken, evalRunResult.Result.RawResponse)
 	}
 
-	t.Logf("Evaluation result: %s", evalResult.RawResponse)
+	t.Logf("Evaluation result: %s", evalRunResult.Result.RawResponse)
 
-	// Grade the result
-	grade, err := client.Grade(ctx, evalResult)
-	if err != nil {
-		t.Fatalf("Grade failed: %v", err)
+	// Validate grade structure (auto-graded)
+	if evalRunResult.Grade == nil {
+		t.Fatal("Expected grade to be auto-generated")
 	}
-
-	// Validate grade structure
-	validateGrade(t, grade)
+	validateGrade(t, evalRunResult.Grade)
 	t.Logf("Grade: Accuracy=%d, Completeness=%d, Relevance=%d, Clarity=%d, Reasoning=%d",
-		grade.Accuracy, grade.Completeness, grade.Relevance, grade.Clarity, grade.Reasoning)
+		evalRunResult.Grade.Accuracy, evalRunResult.Grade.Completeness, evalRunResult.Grade.Relevance,
+		evalRunResult.Grade.Clarity, evalRunResult.Grade.Reasoning)
 }
 
 func TestE2E_GradingScores(t *testing.T) {
@@ -196,33 +220,40 @@ func TestE2E_GradingScores(t *testing.T) {
 	defer cancel()
 
 	// Run evaluation
-	evalResult, err := client.RunEval(ctx, "What is 10 plus 20?")
+	evalRunResult, err := client.RunEval(ctx, Eval{
+		Name:           "grading_test",
+		Description:    "Test grading scores for correct answer",
+		Prompt:         "What is 10 plus 20?",
+		ExpectedResult: "Should return 30",
+	})
 	if err != nil {
 		t.Fatalf("RunEval failed: %v", err)
 	}
 
-	// Grade the result
-	grade, err := client.Grade(ctx, evalResult)
-	if err != nil {
-		t.Fatalf("Grade failed: %v", err)
+	// Check for errors in the result
+	if evalRunResult.Error != nil {
+		t.Fatalf("Eval execution error: %v", evalRunResult.Error)
 	}
 
-	// Validate grade structure and scores
-	validateGrade(t, grade)
+	// Validate grade structure and scores (auto-graded)
+	if evalRunResult.Grade == nil {
+		t.Fatal("Expected grade to be auto-generated")
+	}
+	validateGrade(t, evalRunResult.Grade)
 
 	// Check that scores are reasonable for a correct answer
 	// We expect high scores since the answer should be correct
-	if grade.Accuracy < 3 {
-		t.Errorf("Expected accuracy >= 3 for correct answer, got %d", grade.Accuracy)
+	if evalRunResult.Grade.Accuracy < 3 {
+		t.Errorf("Expected accuracy >= 3 for correct answer, got %d", evalRunResult.Grade.Accuracy)
 	}
 
 	t.Logf("Grade details:")
-	t.Logf("  Accuracy: %d", grade.Accuracy)
-	t.Logf("  Completeness: %d", grade.Completeness)
-	t.Logf("  Relevance: %d", grade.Relevance)
-	t.Logf("  Clarity: %d", grade.Clarity)
-	t.Logf("  Reasoning: %d", grade.Reasoning)
-	t.Logf("  Overall: %s", grade.OverallComment)
+	t.Logf("  Accuracy: %d", evalRunResult.Grade.Accuracy)
+	t.Logf("  Completeness: %d", evalRunResult.Grade.Completeness)
+	t.Logf("  Relevance: %d", evalRunResult.Grade.Relevance)
+	t.Logf("  Clarity: %d", evalRunResult.Grade.Clarity)
+	t.Logf("  Reasoning: %d", evalRunResult.Grade.Reasoning)
+	t.Logf("  Overall: %s", evalRunResult.Grade.OverallComment)
 }
 
 // buildTestServer builds the test MCP server and returns the path to the binary
@@ -240,6 +271,105 @@ func buildTestServer(t *testing.T) string {
 	}
 
 	return outputPath
+}
+
+func TestE2E_LoadConfigAndRunEvals(t *testing.T) {
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if apiKey == "" {
+		t.Skip("ANTHROPIC_API_KEY not set, skipping e2e test")
+	}
+
+	// Build test server
+	serverPath := buildTestServer(t)
+
+	// Load config from YAML
+	config, err := LoadConfig("testdata/mcp-test-evals.yaml")
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+
+	// Override the command to use the built test server
+	config.MCPServer.Command = serverPath
+	config.MCPServer.Args = []string{}
+
+	// Create eval client from config
+	evalConfig := EvalClientConfig{
+		APIKey:  apiKey,
+		Command: config.MCPServer.Command,
+		Args:    config.MCPServer.Args,
+		Env:     config.MCPServer.Env,
+		Model:   config.Model,
+	}
+	client := NewEvalClient(evalConfig)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	// Run all evals from config
+	results, err := client.RunEvals(ctx, config.Evals)
+	if err != nil {
+		t.Fatalf("RunEvals failed: %v", err)
+	}
+
+	// Verify we got results for all evals
+	if len(results) != len(config.Evals) {
+		t.Errorf("expected %d results, got %d", len(config.Evals), len(results))
+	}
+
+	// Check each result
+	for i, result := range results {
+		t.Logf("Eval %d: %s", i, result.Eval.Name)
+
+		if result.Error != nil {
+			t.Errorf("Eval %s failed: %v", result.Eval.Name, result.Error)
+			continue
+		}
+
+		if result.Result == nil {
+			t.Errorf("Eval %s has no result", result.Eval.Name)
+			continue
+		}
+
+		if result.Result.RawResponse == "" {
+			t.Errorf("Eval %s has empty response", result.Eval.Name)
+			continue
+		}
+
+		if result.Grade == nil {
+			t.Errorf("Eval %s has no grade", result.Eval.Name)
+			continue
+		}
+
+		validateGrade(t, result.Grade)
+		t.Logf("  Response: %s", result.Result.RawResponse)
+		t.Logf("  Grade: Accuracy=%d, Completeness=%d, Relevance=%d, Clarity=%d, Reasoning=%d",
+			result.Grade.Accuracy, result.Grade.Completeness, result.Grade.Relevance,
+			result.Grade.Clarity, result.Grade.Reasoning)
+	}
+
+	// Verify specific results based on eval names
+	evalsByName := make(map[string]EvalRunResult)
+	for _, result := range results {
+		evalsByName[result.Eval.Name] = result
+	}
+
+	// Check "add" eval
+	if addResult, ok := evalsByName["add"]; ok {
+		if !strings.Contains(addResult.Result.RawResponse, "8") {
+			t.Errorf("Expected 'add' eval to contain '8', got: %s", addResult.Result.RawResponse)
+		}
+	} else {
+		t.Error("Missing 'add' eval in results")
+	}
+
+	// Check "multiply" eval
+	if multiplyResult, ok := evalsByName["multiply"]; ok {
+		if !strings.Contains(multiplyResult.Result.RawResponse, "42") {
+			t.Errorf("Expected 'multiply' eval to contain '42', got: %s", multiplyResult.Result.RawResponse)
+		}
+	} else {
+		t.Error("Missing 'multiply' eval in results")
+	}
 }
 
 // validateGrade validates that a GradeResult has all required fields and valid values

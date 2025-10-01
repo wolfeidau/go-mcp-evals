@@ -1,0 +1,107 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MCP Evaluation Configuration",
+  "description": "Configuration schema for running evaluations against Model Context Protocol (MCP) servers",
+  "type": "object",
+  "required": ["model", "mcp_server", "evals"],
+  "properties": {
+    "model": {
+      "type": "string",
+      "description": "Anthropic model ID to use for evaluations",
+      "examples": [
+        "claude-3-5-sonnet-20241022",
+        "claude-3-opus-20240229"
+      ]
+    },
+    "timeout": {
+      "type": "string",
+      "description": "Timeout duration for each evaluation (e.g., '2m', '30s')",
+      "pattern": "^[0-9]+(ms|s|m|h)$",
+      "examples": ["2m", "30s", "1h"]
+    },
+    "max_steps": {
+      "type": "integer",
+      "description": "Maximum number of agentic loop iterations",
+      "default": 10,
+      "minimum": 1,
+      "maximum": 100
+    },
+    "max_tokens": {
+      "type": "integer",
+      "description": "Maximum tokens per LLM request",
+      "default": 4096,
+      "minimum": 1,
+      "maximum": 200000
+    },
+    "mcp_server": {
+      "type": "object",
+      "description": "Configuration for the MCP server to evaluate",
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Command to start the MCP server",
+          "examples": ["node", "python", "go", "./my-server"]
+        },
+        "args": {
+          "type": "array",
+          "description": "Arguments to pass to the command",
+          "items": {
+            "type": "string"
+          },
+          "examples": [["index.js"], ["run", "./server"], ["-m", "server"]]
+        },
+        "env": {
+          "type": "array",
+          "description": "Environment variables to set for the MCP server",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z_][A-Z0-9_]*=.*$"
+          },
+          "examples": [["API_KEY=secret", "DEBUG=true"]]
+        }
+      }
+    },
+    "evals": {
+      "type": "array",
+      "description": "List of evaluation test cases to run",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "prompt"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Unique identifier for this evaluation",
+            "examples": ["test_addition", "check_auth", "validate_response"]
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of what this eval tests",
+            "examples": [
+              "Test basic addition functionality",
+              "Verify authentication with valid credentials"
+            ]
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The input prompt to send to the LLM",
+            "minLength": 1,
+            "examples": [
+              "What is 5 plus 3?",
+              "Echo the message 'hello world'"
+            ]
+          },
+          "expected_result": {
+            "type": "string",
+            "description": "Expected behavior or result (used for documentation and grading context)",
+            "examples": [
+              "Should return 8",
+              "Should echo back 'hello world'"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

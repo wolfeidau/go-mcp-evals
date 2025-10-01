@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -88,7 +90,8 @@ func (ec *EvalClient) loadMCPSession(ctx context.Context) (*mcp.ClientSession, *
 	return session, toolsResp, nil
 }
 
-func (ec *EvalClient) RunEval(ctx context.Context, prompt string) (*EvalResult, error) {
+func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, error) {
+	result := &EvalRunResult{Eval: eval}
 	session, toolsResp, err := ec.loadMCPSession(ctx)
 	if err != nil {
 		return nil, err
@@ -128,7 +131,7 @@ func (ec *EvalClient) RunEval(ctx context.Context, prompt string) (*EvalResult, 
 
 	// Initialize message history
 	messages := []anthropic.MessageParam{
-		anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
+		anthropic.NewUserMessage(anthropic.NewTextBlock(eval.Prompt)),
 	}
 
 	const maxSteps = 10
@@ -226,13 +229,47 @@ func (ec *EvalClient) RunEval(ctx context.Context, prompt string) (*EvalResult, 
 		messages = append(messages, anthropic.NewUserMessage(toolResults...))
 	}
 
-	return &EvalResult{
-		Prompt:      prompt,
+	evalResult := &EvalResult{
+		Prompt:      eval.Prompt,
 		RawResponse: finalText.String(),
-	}, nil
+	}
+	result.Result = evalResult
+
+	// Auto-grade the result
+	grade, err := ec.grade(ctx, evalResult)
+	if err != nil {
+		// Don't fail the entire eval if grading fails, just log it
+		result.Error = fmt.Errorf("grading failed: %w", err)
+		return result, nil
+	}
+	result.Grade = grade
+
+	return result, nil
 }
 
-func (ec *EvalClient) Grade(ctx context.Context, evalResult *EvalResult) (*GradeResult, error) {
+// RunEvals executes multiple evaluations and returns all results.
+// Each eval reuses the same MCP session for efficiency.
+// Individual eval failures are captured in EvalRunResult.Error and don't stop the batch.
+func (ec *EvalClient) RunEvals(ctx context.Context, evals []Eval) ([]EvalRunResult, error) {
+	results := make([]EvalRunResult, len(evals))
+
+	for i, eval := range evals {
+		result, err := ec.RunEval(ctx, eval)
+		if err != nil {
+			// Capture error but continue with other evals
+			results[i] = EvalRunResult{
+				Eval:  eval,
+				Error: err,
+			}
+			continue
+		}
+		results[i] = *result
+	}
+
+	return results, nil
+}
+
+func (ec *EvalClient) grade(ctx context.Context, evalResult *EvalResult) (*GradeResult, error) {
 
 	// use a string template to create the grading prompt
 	gradingPrompt := fmt.Sprintf(`Here is the user input: %s
@@ -305,4 +342,42 @@ type EvalConfig struct {
 	MaxTokens int             `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
 	MCPServer MCPServerConfig `yaml:"mcp_server" json:"mcp_server"`
 	Evals     []Eval          `yaml:"evals" json:"evals"`
+}
+
+// LoadConfig loads an evaluation configuration from a YAML or JSON file.
+// The file format is detected by the file extension (.yaml, .yml, or .json).
+func LoadConfig(filePath string) (*EvalConfig, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	var config EvalConfig
+	ext := strings.ToLower(filepath.Ext(filePath))
+
+	switch ext {
+	case ".yaml", ".yml":
+		if err := yaml.Unmarshal(data, &config); err != nil {
+			return nil, fmt.Errorf("failed to parse YAML config: %w", err)
+		}
+	case ".json":
+		if err := json.Unmarshal(data, &config); err != nil {
+			return nil, fmt.Errorf("failed to parse JSON config: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported file extension: %s (expected .yaml, .yml, or .json)", ext)
+	}
+
+	// Validate required fields
+	if config.Model == "" {
+		return nil, fmt.Errorf("model is required in config")
+	}
+	if config.MCPServer.Command == "" {
+		return nil, fmt.Errorf("mcp_server.command is required in config")
+	}
+	if len(config.Evals) == 0 {
+		return nil, fmt.Errorf("at least one eval is required in config")
+	}
+
+	return &config, nil
 }

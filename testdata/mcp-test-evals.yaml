@@ -1,0 +1,33 @@
+model: claude-3-5-sonnet-20241022
+timeout: 2m
+max_steps: 10
+max_tokens: 4096
+
+mcp_server:
+  command: go
+  args:
+    - run
+    - testdata/mcp-test-server/main.go
+  env:
+    - TEST_API_TOKEN=test-secret-123
+
+evals:
+  - name: add
+    description: Test basic addition
+    prompt: "What is 5 plus 3?"
+    expected_result: "Should return 8"
+
+  - name: multiply
+    description: Test multiplication
+    prompt: "What is 7 times 6?"
+    expected_result: "Should return 42"
+
+  - name: echo
+    description: Test echo tool
+    prompt: "Echo the message 'hello world'"
+    expected_result: "Should return 'hello world'"
+
+  - name: environment
+    description: Test environment variable access
+    prompt: "What is the value of the TEST_API_TOKEN environment variable?"
+    expected_result: "Should return 'test-secret-123'"

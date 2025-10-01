@@ -3,6 +3,7 @@ package evaluations
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -218,5 +219,70 @@ func TestEvalClient_loadMCPSession_CustomEnv(t *testing.T) {
 	}
 	if output2.Value == "" {
 		t.Error("expected PATH value to be non-empty but it was empty")
+	}
+}
+
+func TestLoadConfig_YAML(t *testing.T) {
+	config, err := LoadConfig("testdata/mcp-test-evals.yaml")
+	if err != nil {
+		t.Fatalf("failed to load YAML config: %v", err)
+	}
+
+	// Verify basic fields
+	if config.Model != "claude-3-5-sonnet-20241022" {
+		t.Errorf("expected model 'claude-3-5-sonnet-20241022', got %q", config.Model)
+	}
+	if config.Timeout != "2m" {
+		t.Errorf("expected timeout '2m', got %q", config.Timeout)
+	}
+	if config.MaxSteps != 10 {
+		t.Errorf("expected max_steps 10, got %d", config.MaxSteps)
+	}
+	if config.MaxTokens != 4096 {
+		t.Errorf("expected max_tokens 4096, got %d", config.MaxTokens)
+	}
+
+	// Verify MCP server config
+	if config.MCPServer.Command != "go" {
+		t.Errorf("expected command 'go', got %q", config.MCPServer.Command)
+	}
+	if len(config.MCPServer.Args) != 2 {
+		t.Errorf("expected 2 args, got %d", len(config.MCPServer.Args))
+	}
+	if len(config.MCPServer.Env) != 1 {
+		t.Errorf("expected 1 env var, got %d", len(config.MCPServer.Env))
+	}
+
+	// Verify evals
+	if len(config.Evals) != 4 {
+		t.Fatalf("expected 4 evals, got %d", len(config.Evals))
+	}
+
+	firstEval := config.Evals[0]
+	if firstEval.Name != "add" {
+		t.Errorf("expected first eval name 'add', got %q", firstEval.Name)
+	}
+	if firstEval.Prompt != "What is 5 plus 3?" {
+		t.Errorf("expected first eval prompt 'What is 5 plus 3?', got %q", firstEval.Prompt)
+	}
+	if firstEval.ExpectedResult != "Should return 8" {
+		t.Errorf("expected first eval expected_result 'Should return 8', got %q", firstEval.ExpectedResult)
+	}
+}
+
+func TestLoadConfig_InvalidFile(t *testing.T) {
+	_, err := LoadConfig("testdata/nonexistent.yaml")
+	if err == nil {
+		t.Error("expected error for nonexistent file")
+	}
+}
+
+func TestLoadConfig_InvalidExtension(t *testing.T) {
+	_, err := LoadConfig("testdata/test.txt")
+	if err == nil {
+		t.Error("expected error for invalid extension")
+	}
+	if !strings.Contains(err.Error(), "unsupported file extension") {
+		t.Errorf("expected 'unsupported file extension' error, got: %v", err)
 	}
 }

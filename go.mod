@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/anthropics/anthropic-sdk-go v1.13.0
 	github.com/modelcontextprotocol/go-sdk v0.8.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
