@@ -16,7 +16,7 @@ env:
 
 steps:
   - if_changed: ".buildkite/Dockerfile.build"
-    id: base_image
+    key: base_image
     label: ":docker: Create base image"
     # use public base image to avoid recursion or broken base images blocking rebuilds
     image: "buildkite/hosted-agent-base-images:ubuntu-jammy"
@@ -30,7 +30,7 @@ steps:
         --push .
 
   - group: ":mag: QA"
-    id: quality_checks
+    key: quality_checks
     depends_on: [base_image]
     steps:
       - key: lint
