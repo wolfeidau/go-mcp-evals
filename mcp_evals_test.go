@@ -286,3 +286,57 @@ func TestLoadConfig_InvalidExtension(t *testing.T) {
 		t.Errorf("expected 'unsupported file extension' error, got: %v", err)
 	}
 }
+
+func TestEvalClientConfig_Defaults(t *testing.T) {
+	tests := []struct {
+		name           string
+		config         EvalClientConfig
+		expectedSteps  int
+		expectedTokens int
+	}{
+		{
+			name: "applies defaults when not set",
+			config: EvalClientConfig{
+				Command: "echo",
+				Model:   "test-model",
+			},
+			expectedSteps:  10,
+			expectedTokens: 4096,
+		},
+		{
+			name: "applies defaults when zero",
+			config: EvalClientConfig{
+				Command:   "echo",
+				Model:     "test-model",
+				MaxSteps:  0,
+				MaxTokens: 0,
+			},
+			expectedSteps:  10,
+			expectedTokens: 4096,
+		},
+		{
+			name: "respects custom values",
+			config: EvalClientConfig{
+				Command:   "echo",
+				Model:     "test-model",
+				MaxSteps:  5,
+				MaxTokens: 2048,
+			},
+			expectedSteps:  5,
+			expectedTokens: 2048,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := NewEvalClient(tt.config)
+
+			if client.config.MaxSteps != tt.expectedSteps {
+				t.Errorf("expected MaxSteps %d, got %d", tt.expectedSteps, client.config.MaxSteps)
+			}
+			if client.config.MaxTokens != tt.expectedTokens {
+				t.Errorf("expected MaxTokens %d, got %d", tt.expectedTokens, client.config.MaxTokens)
+			}
+		})
+	}
+}
