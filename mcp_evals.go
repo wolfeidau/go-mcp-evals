@@ -6,14 +6,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -455,10 +453,10 @@ type GradeResult struct {
 
 // Eval represents a single evaluation test case
 type Eval struct {
-	Name           string `yaml:"name" json:"name"`
-	Description    string `yaml:"description,omitempty" json:"description,omitempty"`
-	Prompt         string `yaml:"prompt" json:"prompt"`
-	ExpectedResult string `yaml:"expected_result,omitempty" json:"expected_result,omitempty"`
+	Name           string `yaml:"name" json:"name" jsonschema:"Unique identifier for this evaluation"`
+	Description    string `yaml:"description,omitempty" json:"description,omitempty" jsonschema:"Human-readable description of what this eval tests"`
+	Prompt         string `yaml:"prompt" json:"prompt" jsonschema:"The input prompt to send to the LLM"`
+	ExpectedResult string `yaml:"expected_result,omitempty" json:"expected_result,omitempty" jsonschema:"Expected behavior or result (used for documentation and grading context)"`
 }
 
 // EvalRunResult combines the eval configuration with its execution results
@@ -521,60 +519,4 @@ type GradingTrace struct {
 	InputTokens      int           `json:"input_tokens"`       // Input tokens for grading
 	OutputTokens     int           `json:"output_tokens"`      // Output tokens for grading
 	Error            string        `json:"error,omitempty"`    // Error message if grading failed
-}
-
-// MCPServerConfig defines how to start the MCP server
-type MCPServerConfig struct {
-	Command string   `yaml:"command" json:"command"`
-	Args    []string `yaml:"args,omitempty" json:"args,omitempty"`
-	Env     []string `yaml:"env,omitempty" json:"env,omitempty"`
-}
-
-// EvalConfig represents the top-level configuration for running evaluations
-type EvalConfig struct {
-	Model        string          `yaml:"model" json:"model"`
-	GradingModel string          `yaml:"grading_model,omitempty" json:"grading_model,omitempty"`
-	Timeout      string          `yaml:"timeout,omitempty" json:"timeout,omitempty"`
-	MaxSteps     int             `yaml:"max_steps,omitempty" json:"max_steps,omitempty"`
-	MaxTokens    int             `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
-	MCPServer    MCPServerConfig `yaml:"mcp_server" json:"mcp_server"`
-	Evals        []Eval          `yaml:"evals" json:"evals"`
-}
-
-// LoadConfig loads an evaluation configuration from a YAML or JSON file.
-// The file format is detected by the file extension (.yaml, .yml, or .json).
-func LoadConfig(filePath string) (*EvalConfig, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
-	}
-
-	var config EvalConfig
-	ext := strings.ToLower(filepath.Ext(filePath))
-
-	switch ext {
-	case ".yaml", ".yml":
-		if err := yaml.Unmarshal(data, &config); err != nil {
-			return nil, fmt.Errorf("failed to parse YAML config: %w", err)
-		}
-	case ".json":
-		if err := json.Unmarshal(data, &config); err != nil {
-			return nil, fmt.Errorf("failed to parse JSON config: %w", err)
-		}
-	default:
-		return nil, fmt.Errorf("unsupported file extension: %s (expected .yaml, .yml, or .json)", ext)
-	}
-
-	// Validate required fields
-	if config.Model == "" {
-		return nil, fmt.Errorf("model is required in config")
-	}
-	if config.MCPServer.Command == "" {
-		return nil, fmt.Errorf("mcp_server.command is required in config")
-	}
-	if len(config.Evals) == 0 {
-		return nil, fmt.Errorf("at least one eval is required in config")
-	}
-
-	return &config, nil
 }

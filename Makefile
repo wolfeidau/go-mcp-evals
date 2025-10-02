@@ -71,6 +71,11 @@ clean: ## Clean build artifacts
 install: ## Install CLI to GOPATH/bin
 	go install ./cmd/mcp-evals
 
+.PHONY: schema
+schema: ## Generate JSON schema for eval configuration
+	go run ./cmd/mcp-evals schema > eval-config-schema.json
+	@echo "Schema generated at eval-config-schema.json"
+
 .PHONY: check
 check: lint test ## Run all checks (lint + test)
 
