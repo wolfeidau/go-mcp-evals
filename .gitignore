@@ -26,3 +26,4 @@ bin/
 # OS
 .DS_Store
 specs/
+/traces/
