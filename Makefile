@@ -76,6 +76,19 @@ schema: ## Generate JSON schema for eval configuration
 	go run ./cmd/mcp-evals schema > eval-config-schema.json
 	@echo "Schema generated at eval-config-schema.json"
 
+.PHONY: run-test
+run-test: build ## Run CLI with test config using 1Password for API key
+	@echo "Fetching ANTHROPIC_API_KEY from 1Password..."
+	@ANTHROPIC_API_KEY=$$(op item get "Anthropic API Key" --field credential --reveal) \
+		./bin/mcp-evals run --config testdata/mcp-test-evals.yaml
+
+.PHONY: run-test-trace
+run-test-trace: build ## Run CLI with test config and save traces
+	@echo "Fetching ANTHROPIC_API_KEY from 1Password..."
+	@mkdir -p traces
+	@ANTHROPIC_API_KEY=$$(op item get "Anthropic API Key" --field credential --reveal) \
+		./bin/mcp-evals run --config testdata/mcp-test-evals.yaml --trace-dir traces
+
 .PHONY: check
 check: lint test ## Run all checks (lint + test)
 
