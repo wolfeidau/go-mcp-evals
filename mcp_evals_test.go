@@ -26,6 +26,7 @@ func TestEvalClient_loadMCPSession(t *testing.T) {
 				"echo",
 				"get_current_time",
 				"get_env",
+				"get_user",
 			},
 			expectError: false,
 		},
@@ -254,8 +255,8 @@ func TestLoadConfig_YAML(t *testing.T) {
 	}
 
 	// Verify evals
-	if len(config.Evals) != 4 {
-		t.Fatalf("expected 4 evals, got %d", len(config.Evals))
+	if len(config.Evals) != 3 {
+		t.Fatalf("expected 3 evals, got %d", len(config.Evals))
 	}
 
 	firstEval := config.Evals[0]

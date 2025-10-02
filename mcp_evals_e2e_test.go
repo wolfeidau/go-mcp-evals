@@ -4,6 +4,8 @@ package evaluations
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,11 +25,12 @@ func TestE2E_BasicEvaluation(t *testing.T) {
 
 	// Configure eval client
 	config := EvalClientConfig{
-		APIKey:  apiKey,
-		Command: serverPath,
-		Args:    []string{},
-		Env:     []string{},
-		Model:   "claude-3-5-sonnet-20241022", // claude-sonnet-4-0
+		APIKey:       apiKey,
+		Command:      serverPath,
+		Args:         []string{},
+		Env:          []string{},
+		Model:        "claude-sonnet-4-5-20250929", // claude-sonnet-4-0
+		GradingModel: "claude-3-5-sonnet-20241022",
 	}
 
 	client := NewEvalClient(config)
@@ -74,6 +77,9 @@ func TestE2E_BasicEvaluation(t *testing.T) {
 
 	// Validate trace data
 	validateTrace(t, evalRunResult.Trace)
+
+	// Save trace for inspection
+	saveTrace(t, evalRunResult.Trace, "basic_evaluation_trace.json")
 }
 
 func TestE2E_MultipleTools(t *testing.T) {
@@ -138,6 +144,9 @@ func TestE2E_MultipleTools(t *testing.T) {
 
 	// Validate trace data
 	validateTrace(t, evalRunResult.Trace)
+
+	// Save trace for inspection
+	saveTrace(t, evalRunResult.Trace, "multiple_tools_trace.json")
 }
 
 func TestE2E_EnvironmentVariables(t *testing.T) {
@@ -306,11 +315,12 @@ func TestE2E_LoadConfigAndRunEvals(t *testing.T) {
 
 	// Create eval client from config
 	evalConfig := EvalClientConfig{
-		APIKey:  apiKey,
-		Command: config.MCPServer.Command,
-		Args:    config.MCPServer.Args,
-		Env:     config.MCPServer.Env,
-		Model:   config.Model,
+		APIKey:       apiKey,
+		Command:      config.MCPServer.Command,
+		Args:         config.MCPServer.Args,
+		Env:          config.MCPServer.Env,
+		Model:        config.Model,
+		GradingModel: config.GradingModel,
 	}
 	client := NewEvalClient(evalConfig)
 
@@ -360,6 +370,10 @@ func TestE2E_LoadConfigAndRunEvals(t *testing.T) {
 
 		// Validate trace data
 		validateTrace(t, result.Trace)
+
+		// Save trace for inspection
+		traceFilename := fmt.Sprintf("batch_%s_trace.json", result.Eval.Name)
+		saveTrace(t, result.Trace, traceFilename)
 	}
 
 	// Verify specific results based on eval names
@@ -377,13 +391,14 @@ func TestE2E_LoadConfigAndRunEvals(t *testing.T) {
 		t.Error("Missing 'add' eval in results")
 	}
 
-	// Check "multiply" eval
-	if multiplyResult, ok := evalsByName["multiply"]; ok {
-		if !strings.Contains(multiplyResult.Result.RawResponse, "42") {
-			t.Errorf("Expected 'multiply' eval to contain '42', got: %s", multiplyResult.Result.RawResponse)
+	// Check "get_user_info" eval
+	if getUserResult, ok := evalsByName["get_user_info"]; ok {
+		response := strings.ToLower(getUserResult.Result.RawResponse)
+		if !strings.Contains(response, "alice") || !strings.Contains(response, "user-123") {
+			t.Errorf("Expected 'get_user_info' eval to contain 'Alice' and 'user-123', got: %s", getUserResult.Result.RawResponse)
 		}
 	} else {
-		t.Error("Missing 'multiply' eval in results")
+		t.Error("Missing 'get_user_info' eval in results")
 	}
 }
 
@@ -528,4 +543,31 @@ func validateTrace(t *testing.T, trace *EvalTrace) {
 
 	t.Logf("Trace summary: %d steps, %d tool calls, %d total tokens, duration: %v",
 		trace.StepCount, trace.ToolCallCount, trace.TotalInputTokens+trace.TotalOutputTokens, trace.TotalDuration)
+}
+
+// saveTrace saves an evaluation trace to a JSON file for inspection
+func saveTrace(t *testing.T, trace *EvalTrace, filename string) {
+	t.Helper()
+
+	// Create traces directory if it doesn't exist
+	tracesDir := "traces"
+	if err := os.MkdirAll(tracesDir, 0755); err != nil {
+		t.Logf("Warning: failed to create traces directory: %v", err)
+		return
+	}
+
+	// Write trace to JSON file
+	traceJSON, err := json.MarshalIndent(trace, "", "  ")
+	if err != nil {
+		t.Logf("Warning: failed to marshal trace: %v", err)
+		return
+	}
+
+	outputPath := filepath.Join(tracesDir, filename)
+	if err := os.WriteFile(outputPath, traceJSON, 0644); err != nil {
+		t.Logf("Warning: failed to write trace file: %v", err)
+		return
+	}
+
+	t.Logf("Trace saved to: %s", outputPath)
 }

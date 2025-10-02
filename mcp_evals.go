@@ -37,13 +37,14 @@ const (
 )
 
 type EvalClientConfig struct {
-	APIKey    string
-	Command   string
-	Args      []string
-	Env       []string
-	Model     string
-	MaxSteps  int
-	MaxTokens int
+	APIKey       string
+	Command      string
+	Args         []string
+	Env          []string
+	Model        string
+	GradingModel string // Optional: if set, use this model for grading instead of Model
+	MaxSteps     int
+	MaxTokens    int
 }
 
 type EvalClient struct {
@@ -396,9 +397,15 @@ Here is the LLM's answer: %s`, evalResult.Prompt, evalResult.RawResponse)
 
 	trace.GradingPrompt = gradingPrompt
 
+	// Determine which model to use for grading
+	gradingModel := ec.config.Model
+	if ec.config.GradingModel != "" {
+		gradingModel = ec.config.GradingModel
+	}
+
 	// Execute grading
 	resp, err := ec.client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     anthropic.Model(ec.config.Model),
+		Model:     anthropic.Model(gradingModel),
 		MaxTokens: 1000,
 		System: []anthropic.TextBlockParam{
 			{Text: EvalSystemPrompt},
@@ -525,12 +532,13 @@ type MCPServerConfig struct {
 
 // EvalConfig represents the top-level configuration for running evaluations
 type EvalConfig struct {
-	Model     string          `yaml:"model" json:"model"`
-	Timeout   string          `yaml:"timeout,omitempty" json:"timeout,omitempty"`
-	MaxSteps  int             `yaml:"max_steps,omitempty" json:"max_steps,omitempty"`
-	MaxTokens int             `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
-	MCPServer MCPServerConfig `yaml:"mcp_server" json:"mcp_server"`
-	Evals     []Eval          `yaml:"evals" json:"evals"`
+	Model        string          `yaml:"model" json:"model"`
+	GradingModel string          `yaml:"grading_model,omitempty" json:"grading_model,omitempty"`
+	Timeout      string          `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	MaxSteps     int             `yaml:"max_steps,omitempty" json:"max_steps,omitempty"`
+	MaxTokens    int             `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
+	MCPServer    MCPServerConfig `yaml:"mcp_server" json:"mcp_server"`
+	Evals        []Eval          `yaml:"evals" json:"evals"`
 }
 
 // LoadConfig loads an evaluation configuration from a YAML or JSON file.
