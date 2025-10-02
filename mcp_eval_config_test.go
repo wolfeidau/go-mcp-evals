@@ -2,6 +2,7 @@ package evaluations
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -144,8 +145,8 @@ func TestSchemaForEvalConfig(t *testing.T) {
 	}
 
 	// Verify top-level metadata fields
-	if schemaURL, ok := schemaMap["$schema"].(string); !ok || schemaURL != "http://json-schema.org/draft-07/schema#" {
-		t.Errorf("expected $schema to be 'http://json-schema.org/draft-07/schema#', got %v", schemaMap["$schema"])
+	if schemaURL, ok := schemaMap["$schema"].(string); !ok || schemaURL != "https://json-schema.org/draft/2020-12/schema" {
+		t.Errorf("expected $schema to be 'https://json-schema.org/draft/2020-12/schema', got %v", schemaMap["$schema"])
 	}
 	if title, ok := schemaMap["title"].(string); !ok || title != "MCP Evaluation Configuration" {
 		t.Errorf("expected title to be 'MCP Evaluation Configuration', got %v", schemaMap["title"])
@@ -201,6 +202,296 @@ func TestSchemaForEvalConfig(t *testing.T) {
 			if !strings.Contains(desc, tc.description) {
 				t.Errorf("path %v: expected description to contain %q, got %q", tc.path, tc.description, desc)
 			}
+		}
+	}
+}
+
+func TestValidateConfigFile_Valid(t *testing.T) {
+	// Test with the valid test configuration
+	result, err := ValidateConfigFile("testdata/mcp-test-evals.yaml")
+	if err != nil {
+		t.Fatalf("ValidateConfigFile failed: %v", err)
+	}
+
+	if !result.Valid {
+		t.Errorf("Expected valid config, but got %d errors:", len(result.Errors))
+		for _, verr := range result.Errors {
+			t.Errorf("  - [%s] %s", verr.Path, verr.Message)
+		}
+	}
+
+	if len(result.Errors) != 0 {
+		t.Errorf("Expected 0 errors, got %d", len(result.Errors))
+	}
+}
+
+func TestValidateConfigFile_MissingModel(t *testing.T) {
+	configContent := `
+mcp_server:
+  command: echo
+  args: ["test"]
+
+evals:
+  - name: test
+    prompt: "test prompt"
+`
+
+	tmpFile, err := os.CreateTemp("", "invalid-missing-model-*.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(configContent); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+	tmpFile.Close()
+
+	configPath := tmpFile.Name()
+
+	result, err := ValidateConfigFile(configPath)
+	if err != nil {
+		t.Fatalf("ValidateConfigFile failed: %v", err)
+	}
+
+	if result.Valid {
+		t.Error("Expected invalid config, but got valid")
+	}
+
+	if len(result.Errors) == 0 {
+		t.Error("Expected validation errors, but got none")
+	}
+
+	t.Logf("Got %d validation errors (expected)", len(result.Errors))
+	for _, verr := range result.Errors {
+		t.Logf("  - [%s] %s", verr.Path, verr.Message)
+	}
+}
+
+func TestValidateConfigFile_MissingMCPServerCommand(t *testing.T) {
+	configContent := `
+model: claude-3-5-sonnet-20241022
+
+mcp_server:
+  args: ["test"]
+
+evals:
+  - name: test
+    prompt: "test prompt"
+`
+
+	tmpFile, err := os.CreateTemp("", "invalid-missing-command-*.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(configContent); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+	tmpFile.Close()
+
+	configPath := tmpFile.Name()
+
+	result, err := ValidateConfigFile(configPath)
+	if err != nil {
+		t.Fatalf("ValidateConfigFile failed: %v", err)
+	}
+
+	if result.Valid {
+		t.Error("Expected invalid config, but got valid")
+	}
+
+	if len(result.Errors) == 0 {
+		t.Error("Expected validation errors, but got none")
+	}
+
+	t.Logf("Got %d validation errors (expected)", len(result.Errors))
+	for _, verr := range result.Errors {
+		t.Logf("  - [%s] %s", verr.Path, verr.Message)
+	}
+}
+
+func TestValidateConfigFile_MissingEvals(t *testing.T) {
+	configContent := `
+model: claude-3-5-sonnet-20241022
+
+mcp_server:
+  command: echo
+  args: ["test"]
+`
+
+	tmpFile, err := os.CreateTemp("", "invalid-missing-evals-*.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(configContent); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+	tmpFile.Close()
+
+	configPath := tmpFile.Name()
+
+	result, err := ValidateConfigFile(configPath)
+	if err != nil {
+		t.Fatalf("ValidateConfigFile failed: %v", err)
+	}
+
+	if result.Valid {
+		t.Error("Expected invalid config, but got valid")
+	}
+
+	if len(result.Errors) == 0 {
+		t.Error("Expected validation errors, but got none")
+	}
+
+	t.Logf("Got %d validation errors (expected)", len(result.Errors))
+	for _, verr := range result.Errors {
+		t.Logf("  - [%s] %s", verr.Path, verr.Message)
+	}
+}
+
+func TestValidateConfigFile_InvalidEval(t *testing.T) {
+	configContent := `
+model: claude-3-5-sonnet-20241022
+
+mcp_server:
+  command: echo
+  args: ["test"]
+
+evals:
+  - name: test
+    # missing prompt
+`
+
+	tmpFile, err := os.CreateTemp("", "invalid-eval-*.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(configContent); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+	tmpFile.Close()
+
+	configPath := tmpFile.Name()
+
+	result, err := ValidateConfigFile(configPath)
+	if err != nil {
+		t.Fatalf("ValidateConfigFile failed: %v", err)
+	}
+
+	if result.Valid {
+		t.Error("Expected invalid config, but got valid")
+	}
+
+	if len(result.Errors) == 0 {
+		t.Error("Expected validation errors, but got none")
+	}
+
+	t.Logf("Got %d validation errors (expected)", len(result.Errors))
+	for _, verr := range result.Errors {
+		t.Logf("  - [%s] %s", verr.Path, verr.Message)
+	}
+}
+
+func TestValidateConfigFile_InvalidFileExtension(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "config-*.txt")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString("test"); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+	tmpFile.Close()
+
+	configPath := tmpFile.Name()
+
+	_, err = ValidateConfigFile(configPath)
+	if err == nil {
+		t.Error("Expected error for invalid file extension, but got none")
+	}
+
+	if !strings.Contains(err.Error(), "unsupported file extension") {
+		t.Errorf("Expected 'unsupported file extension' error, got: %v", err)
+	}
+}
+
+func TestValidateConfigFile_NonExistentFile(t *testing.T) {
+	_, err := ValidateConfigFile("nonexistent-file.yaml")
+	if err == nil {
+		t.Error("Expected error for non-existent file, but got none")
+	}
+}
+
+func TestValidateConfigFile_InvalidYAML(t *testing.T) {
+	invalidYAML := `
+model: claude
+  invalid: indentation
+    wrong: level
+`
+
+	tmpFile, err := os.CreateTemp("", "invalid-*.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(invalidYAML); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+	tmpFile.Close()
+
+	configPath := tmpFile.Name()
+
+	_, err = ValidateConfigFile(configPath)
+	if err == nil {
+		t.Error("Expected error for invalid YAML, but got none")
+	}
+}
+
+func TestValidateConfigFile_JSONFormat(t *testing.T) {
+	configContent := `{
+  "model": "claude-3-5-sonnet-20241022",
+  "mcp_server": {
+    "command": "echo",
+    "args": ["test"]
+  },
+  "evals": [
+    {
+      "name": "test",
+      "prompt": "test prompt"
+    }
+  ]
+}`
+
+	tmpFile, err := os.CreateTemp("", "valid-*.json")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(configContent); err != nil {
+		t.Fatalf("Failed to write test config: %v", err)
+	}
+	tmpFile.Close()
+
+	configPath := tmpFile.Name()
+
+	result, err := ValidateConfigFile(configPath)
+	if err != nil {
+		t.Fatalf("ValidateConfigFile failed: %v", err)
+	}
+
+	if !result.Valid {
+		t.Errorf("Expected valid config, but got %d errors:", len(result.Errors))
+		for _, verr := range result.Errors {
+			t.Errorf("  - [%s] %s", verr.Path, verr.Message)
 		}
 	}
 }

@@ -26,3 +26,5 @@ bin/
 # OS
 .DS_Store
 /traces/
+# Added by goreleaser init:
+dist/

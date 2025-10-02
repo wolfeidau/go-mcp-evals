@@ -29,6 +29,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+	case "validate":
+		if err := validateCommand(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	case "schema":
 		if err := schemaCommand(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -41,6 +46,50 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
+}
+
+func validateCommand() error {
+	fs := flag.NewFlagSet("validate", flag.ExitOnError)
+	configPath := fs.String("config", "", "Path to evaluation configuration file (YAML or JSON)")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: mcp-evals validate --config <path>\n\n")
+		fmt.Fprintf(os.Stderr, "Validate evaluation configuration file against JSON schema.\n\n")
+		fmt.Fprintf(os.Stderr, "Flags:\n")
+		fs.PrintDefaults()
+	}
+
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		return err
+	}
+
+	if *configPath == "" {
+		return fmt.Errorf("--config flag is required")
+	}
+
+	// Validate the config file
+	result, err := evaluations.ValidateConfigFile(*configPath)
+	if err != nil {
+		return fmt.Errorf("validation error: %w", err)
+	}
+
+	if result.Valid {
+		fmt.Printf("✓ Configuration is valid: %s\n", *configPath)
+		return nil
+	}
+
+	// Print validation errors
+	fmt.Printf("✗ Configuration has %d error(s):\n\n", len(result.Errors))
+	for i, verr := range result.Errors {
+		if verr.Path != "" {
+			fmt.Printf("%d. [%s] %s\n", i+1, verr.Path, verr.Message)
+		} else {
+			fmt.Printf("%d. %s\n", i+1, verr.Message)
+		}
+	}
+	fmt.Println()
+
+	return fmt.Errorf("validation failed")
 }
 
 func schemaCommand() error {
@@ -311,6 +360,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "Usage: mcp-evals <command> [flags]\n\n")
 	fmt.Fprintf(os.Stderr, "Commands:\n")
 	fmt.Fprintf(os.Stderr, "  run       Run evaluations against an MCP server (default)\n")
+	fmt.Fprintf(os.Stderr, "  validate  Validate configuration file against JSON schema\n")
 	fmt.Fprintf(os.Stderr, "  schema    Generate JSON schema for evaluation configuration\n")
 	fmt.Fprintf(os.Stderr, "  help      Show this help message\n\n")
 	fmt.Fprintf(os.Stderr, "Run 'mcp-evals <command> --help' for more information on a command.\n")
