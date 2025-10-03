@@ -36,6 +36,7 @@ const (
 
 type EvalClientConfig struct {
 	APIKey       string
+	BaseURL      string // Optional: if set, override the default Anthropic API endpoint
 	Command      string
 	Args         []string
 	Env          []string
@@ -54,6 +55,9 @@ func NewEvalClient(config EvalClientConfig) *EvalClient {
 	opts := []option.RequestOption{}
 	if config.APIKey != "" {
 		opts = append(opts, option.WithAPIKey(config.APIKey))
+	}
+	if config.BaseURL != "" {
+		opts = append(opts, option.WithBaseURL(config.BaseURL))
 	}
 
 	// Apply defaults for optional fields

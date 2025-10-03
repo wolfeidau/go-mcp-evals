@@ -121,6 +121,7 @@ func runCommand() error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	configPath := fs.String("config", "", "Path to evaluation configuration file (YAML or JSON)")
 	apiKey := fs.String("api-key", "", "Anthropic API key (overrides ANTHROPIC_API_KEY env var)")
+	baseURL := fs.String("base-url", "", "Base URL for Anthropic API (overrides ANTHROPIC_BASE_URL env var)")
 	traceDir := fs.String("trace-dir", "", "Directory to write trace files (optional)")
 	quiet := fs.Bool("quiet", false, "Suppress progress output, only show summary")
 
@@ -162,8 +163,14 @@ func runCommand() error {
 		defer cancel()
 	}
 
+	// Resolve base URL: flag takes precedence, then env var
+	resolvedBaseURL := *baseURL
+	if resolvedBaseURL == "" {
+		resolvedBaseURL = os.Getenv("ANTHROPIC_BASE_URL")
+	}
+
 	// Create client
-	client := createClient(config, *apiKey)
+	client := createClient(config, *apiKey, resolvedBaseURL)
 
 	// Run evaluations
 	if !*quiet {
@@ -192,9 +199,10 @@ func runCommand() error {
 	return nil
 }
 
-func createClient(config *evaluations.EvalConfig, apiKey string) *evaluations.EvalClient {
+func createClient(config *evaluations.EvalConfig, apiKey, baseURL string) *evaluations.EvalClient {
 	clientConfig := evaluations.EvalClientConfig{
 		APIKey:       apiKey,
+		BaseURL:      baseURL,
 		Command:      config.MCPServer.Command,
 		Args:         config.MCPServer.Args,
 		Env:          config.MCPServer.Env,
