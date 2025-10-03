@@ -18,20 +18,24 @@ const (
 	SystemPrompt = "You are an assistant responsible for evaluating the results of calling various tools. Given the user's query, use the tools available to you to answer the question."
 
 	EvalSystemPrompt = `You are an expert evaluator assessing how well an LLM answers a given question. Review the provided answer and score it from 1 to 5 in each of the following categories:
-        Accuracy - Does the answer contain factual errors or hallucinations?
-        Completeness - Does the answer fully address all parts of the question?
-        Relevance - Is the information directly related to the question?
-        Clarity - Is the explanation easy to understand and well-structured?
-        Reasoning - Does the answer show logical thinking or provide evidence or rationale?
-        Return your evaluation as a JSON object in the format:
-        {
-            "accuracy": 1-5,
-            "completeness": 1-5,
-            "relevance": 1-5,
-            "clarity": 1-5,
-            "reasoning": 1-5,
-            "overall_comments": "A short paragraph summarizing the strengths and weaknesses of the answer."
-        }`
+
+- Accuracy: Does the answer contain factual errors or hallucinations?
+- Completeness: Does the answer fully address all parts of the question?
+- Relevance: Is the information directly related to the question?
+- Clarity: Is the explanation easy to understand and well-structured?
+- Reasoning: Does the answer show logical thinking or provide evidence or rationale?
+
+CRITICAL: Return ONLY a valid JSON object with no markdown formatting, no code blocks, and no explanation. Your entire response must be valid JSON starting with { and ending with }.
+
+Use this exact format:
+{
+    "accuracy": 1-5,
+    "completeness": 1-5,
+    "relevance": 1-5,
+    "clarity": 1-5,
+    "reasoning": 1-5,
+    "overall_comments": "A short paragraph summarizing the strengths and weaknesses of the answer."
+}`
 )
 
 type EvalClientConfig struct {
@@ -468,16 +472,10 @@ Here is the LLM's answer: %s%s`, evalResult.Prompt, evalResult.RawResponse, tool
 // stripMarkdownCodeFence removes markdown code fences from a string if present
 func stripMarkdownCodeFence(s string) string {
 	cleaned := strings.TrimSpace(s)
-	if strings.HasPrefix(cleaned, "```json") {
-		cleaned = strings.TrimPrefix(cleaned, "```json")
-		cleaned = strings.TrimSuffix(cleaned, "```")
-		cleaned = strings.TrimSpace(cleaned)
-	} else if strings.HasPrefix(cleaned, "```") {
-		cleaned = strings.TrimPrefix(cleaned, "```")
-		cleaned = strings.TrimSuffix(cleaned, "```")
-		cleaned = strings.TrimSpace(cleaned)
-	}
-	return cleaned
+	cleaned = strings.TrimPrefix(cleaned, "```json")
+	cleaned = strings.TrimPrefix(cleaned, "```")
+	cleaned = strings.TrimSuffix(cleaned, "```")
+	return strings.TrimSpace(cleaned)
 }
 
 type EvalResult struct {
