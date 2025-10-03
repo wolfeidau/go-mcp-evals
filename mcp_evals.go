@@ -472,16 +472,10 @@ Here is the LLM's answer: %s%s`, evalResult.Prompt, evalResult.RawResponse, tool
 // stripMarkdownCodeFence removes markdown code fences from a string if present
 func stripMarkdownCodeFence(s string) string {
 	cleaned := strings.TrimSpace(s)
-	if strings.HasPrefix(cleaned, "```json") {
-		cleaned = strings.TrimPrefix(cleaned, "```json")
-		cleaned = strings.TrimSuffix(cleaned, "```")
-		cleaned = strings.TrimSpace(cleaned)
-	} else if strings.HasPrefix(cleaned, "```") {
-		cleaned = strings.TrimPrefix(cleaned, "```")
-		cleaned = strings.TrimSuffix(cleaned, "```")
-		cleaned = strings.TrimSpace(cleaned)
-	}
-	return cleaned
+	cleaned = strings.TrimPrefix(cleaned, "```json")
+	cleaned = strings.TrimPrefix(cleaned, "```")
+	cleaned = strings.TrimSuffix(cleaned, "```")
+	return strings.TrimSpace(cleaned)
 }
 
 type EvalResult struct {
