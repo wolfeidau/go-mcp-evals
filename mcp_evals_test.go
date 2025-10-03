@@ -221,3 +221,94 @@ func TestEvalClient_loadMCPSession_CustomEnv(t *testing.T) {
 		t.Error("expected PATH value to be non-empty but it was empty")
 	}
 }
+
+func TestStripMarkdownCodeFence(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "plain JSON without code fence",
+			input:    `{"key": "value"}`,
+			expected: `{"key": "value"}`,
+		},
+		{
+			name:     "JSON with ```json fence",
+			input:    "```json\n{\"key\": \"value\"}\n```",
+			expected: `{"key": "value"}`,
+		},
+		{
+			name:     "JSON with generic ``` fence",
+			input:    "```\n{\"key\": \"value\"}\n```",
+			expected: `{"key": "value"}`,
+		},
+		{
+			name:     "JSON with ```json fence and extra whitespace",
+			input:    "  ```json\n  {\"key\": \"value\"}  \n```  ",
+			expected: `{"key": "value"}`,
+		},
+		{
+			name:     "multiline JSON with ```json fence",
+			input:    "```json\n{\n  \"accuracy\": 5,\n  \"completeness\": 4\n}\n```",
+			expected: "{\n  \"accuracy\": 5,\n  \"completeness\": 4\n}",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "whitespace only",
+			input:    "   \n  \t  ",
+			expected: "",
+		},
+		{
+			name: "grading response format",
+			input: `{
+    "accuracy": 5,
+    "completeness": 5,
+    "relevance": 5,
+    "clarity": 5,
+    "reasoning": 5,
+    "overall_comments": "Excellent answer."
+}`,
+			expected: `{
+    "accuracy": 5,
+    "completeness": 5,
+    "relevance": 5,
+    "clarity": 5,
+    "reasoning": 5,
+    "overall_comments": "Excellent answer."
+}`,
+		},
+		{
+			name: "grading response with json fence",
+			input: "```json\n" + `{
+    "accuracy": 5,
+    "completeness": 5,
+    "relevance": 5,
+    "clarity": 5,
+    "reasoning": 5,
+    "overall_comments": "Excellent answer."
+}` + "\n```",
+			expected: `{
+    "accuracy": 5,
+    "completeness": 5,
+    "relevance": 5,
+    "clarity": 5,
+    "reasoning": 5,
+    "overall_comments": "Excellent answer."
+}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stripMarkdownCodeFence(tt.input)
+			if result != tt.expected {
+				t.Errorf("stripMarkdownCodeFence() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}

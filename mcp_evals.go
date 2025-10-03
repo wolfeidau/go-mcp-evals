@@ -342,7 +342,7 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 	result.Result = evalResult
 
 	// Auto-grade the result with tracing
-	grade, gradingTrace, err := ec.gradeWithTrace(ctx, eval, evalResult)
+	grade, gradingTrace, err := ec.gradeWithTrace(ctx, eval, evalResult, trace)
 	if err != nil {
 		// Don't fail the entire eval if grading fails, just log it
 		result.Error = fmt.Errorf("grading failed: %w", err)
@@ -381,7 +381,7 @@ func (ec *EvalClient) RunEvals(ctx context.Context, evals []Eval) ([]EvalRunResu
 }
 
 // gradeWithTrace grades an evaluation result and returns complete trace data
-func (ec *EvalClient) gradeWithTrace(ctx context.Context, eval Eval, evalResult *EvalResult) (*GradeResult, *GradingTrace, error) {
+func (ec *EvalClient) gradeWithTrace(ctx context.Context, eval Eval, evalResult *EvalResult, execTrace *EvalTrace) (*GradeResult, *GradingTrace, error) {
 	trace := &GradingTrace{
 		UserPrompt:     eval.Prompt,
 		ModelResponse:  evalResult.RawResponse,
@@ -389,9 +389,31 @@ func (ec *EvalClient) gradeWithTrace(ctx context.Context, eval Eval, evalResult 
 		StartTime:      time.Now(),
 	}
 
+	// Build tool execution summary for grading context
+	var toolSummary strings.Builder
+	if execTrace != nil && execTrace.ToolCallCount > 0 {
+		toolSummary.WriteString("\n\nTool Execution Context:\n")
+		toolSummary.WriteString("The LLM had access to and successfully called the following tools to gather information:\n")
+		for _, step := range execTrace.Steps {
+			for _, toolCall := range step.ToolCalls {
+				toolSummary.WriteString(fmt.Sprintf("\n- Tool: '%s'\n", toolCall.ToolName))
+				if toolCall.Success {
+					toolSummary.WriteString("  Status: SUCCESS\n")
+					if len(toolCall.Output) > 0 {
+						// Include the actual tool output so grader can verify data accuracy
+						toolSummary.WriteString(fmt.Sprintf("  Returned data: %s\n", string(toolCall.Output)))
+					}
+				} else {
+					toolSummary.WriteString(fmt.Sprintf("  Status: FAILED - %s\n", toolCall.Error))
+				}
+			}
+		}
+		toolSummary.WriteString("\nThe LLM's answer should be evaluated based on how well it used this tool-provided data.\n")
+	}
+
 	// Build grading prompt
 	gradingPrompt := fmt.Sprintf(`Here is the user input: %s
-Here is the LLM's answer: %s`, evalResult.Prompt, evalResult.RawResponse)
+Here is the LLM's answer: %s%s`, evalResult.Prompt, evalResult.RawResponse, toolSummary.String())
 
 	trace.GradingPrompt = gradingPrompt
 
@@ -428,13 +450,30 @@ Here is the LLM's answer: %s`, evalResult.Prompt, evalResult.RawResponse)
 	trace.OutputTokens = int(resp.Usage.OutputTokens)
 
 	// Parse grade result
+	cleanedResponse := stripMarkdownCodeFence(rawResponse)
+
 	var gradeResult GradeResult
-	if err := json.Unmarshal([]byte(rawResponse), &gradeResult); err != nil {
+	if err := json.Unmarshal([]byte(cleanedResponse), &gradeResult); err != nil {
 		trace.Error = err.Error()
 		return nil, trace, fmt.Errorf("failed to parse grading response: %w", err)
 	}
 
 	return &gradeResult, trace, nil
+}
+
+// stripMarkdownCodeFence removes markdown code fences from a string if present
+func stripMarkdownCodeFence(s string) string {
+	cleaned := strings.TrimSpace(s)
+	if strings.HasPrefix(cleaned, "```json") {
+		cleaned = strings.TrimPrefix(cleaned, "```json")
+		cleaned = strings.TrimSuffix(cleaned, "```")
+		cleaned = strings.TrimSpace(cleaned)
+	} else if strings.HasPrefix(cleaned, "```") {
+		cleaned = strings.TrimPrefix(cleaned, "```")
+		cleaned = strings.TrimSuffix(cleaned, "```")
+		cleaned = strings.TrimSpace(cleaned)
+	}
+	return cleaned
 }
 
 type EvalResult struct {
