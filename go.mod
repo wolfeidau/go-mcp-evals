@@ -12,6 +12,7 @@ require (
 )
 
 require (
+	github.com/alecthomas/kong v1.12.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
