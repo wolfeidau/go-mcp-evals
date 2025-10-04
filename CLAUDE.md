@@ -77,6 +77,17 @@ go test -cover ./...
 - Package names: lowercase, descriptive (buildkite, commands, trace, tokens)
 - Use contexts for cancellation
 
+## Testing Style
+- **Assertions**: ALWAYS use `assert := require.New(t)` at the start of each test function or table-driven test case
+- Use the testify/require assertion style for all test assertions:
+  - `assert.NoError(err)` instead of `if err != nil { t.Fatal(...) }`
+  - `assert.Equal(expected, actual)` instead of `if actual != expected { t.Errorf(...) }`
+  - `assert.True(condition)` instead of `if !condition { t.Error(...) }`
+  - `assert.NotNil(value)` instead of `if value == nil { t.Fatal(...) }`
+  - `assert.Len(slice, expectedLen)` instead of `if len(slice) != expectedLen { t.Errorf(...) }`
+  - `assert.Contains(str, substr)` instead of `if !strings.Contains(str, substr) { t.Errorf(...) }`
+- For table-driven tests, create `assert := require.New(t)` inside each `t.Run()` subtest
+
 ## Documentation Style
 When creating any documentation (README files, code comments, design docs), write in the style of an Amazon engineer:
 - Start with the customer problem and work backwards
