@@ -3,73 +3,50 @@ package evaluations
 import (
 	"encoding/json"
 	"os"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestLoadConfig_YAML(t *testing.T) {
+	assert := require.New(t)
+
 	config, err := LoadConfig("testdata/mcp-test-evals.yaml")
-	if err != nil {
-		t.Fatalf("failed to load YAML config: %v", err)
-	}
+	assert.NoError(err)
 
 	// Verify basic fields
-	if config.Model != "claude-3-5-sonnet-20241022" {
-		t.Errorf("expected model 'claude-3-5-sonnet-20241022', got %q", config.Model)
-	}
-	if config.Timeout != "2m" {
-		t.Errorf("expected timeout '2m', got %q", config.Timeout)
-	}
-	if config.MaxSteps != 10 {
-		t.Errorf("expected max_steps 10, got %d", config.MaxSteps)
-	}
-	if config.MaxTokens != 4096 {
-		t.Errorf("expected max_tokens 4096, got %d", config.MaxTokens)
-	}
+	assert.Equal("claude-3-5-sonnet-20241022", config.Model)
+	assert.Equal("2m", config.Timeout)
+	assert.EqualValues(10, config.MaxSteps)
+	assert.EqualValues(4096, config.MaxTokens)
 
 	// Verify MCP server config
-	if config.MCPServer.Command != "go" {
-		t.Errorf("expected command 'go', got %q", config.MCPServer.Command)
-	}
-	if len(config.MCPServer.Args) != 2 {
-		t.Errorf("expected 2 args, got %d", len(config.MCPServer.Args))
-	}
-	if len(config.MCPServer.Env) != 1 {
-		t.Errorf("expected 1 env var, got %d", len(config.MCPServer.Env))
-	}
+	assert.Equal("go", config.MCPServer.Command)
+	assert.Len(config.MCPServer.Args, 2)
+	assert.Len(config.MCPServer.Env, 1)
 
 	// Verify evals
-	if len(config.Evals) != 3 {
-		t.Fatalf("expected 3 evals, got %d", len(config.Evals))
-	}
+	assert.Len(config.Evals, 3)
 
 	firstEval := config.Evals[0]
-	if firstEval.Name != "add" {
-		t.Errorf("expected first eval name 'add', got %q", firstEval.Name)
-	}
-	if firstEval.Prompt != "What is 5 plus 3?" {
-		t.Errorf("expected first eval prompt 'What is 5 plus 3?', got %q", firstEval.Prompt)
-	}
-	if firstEval.ExpectedResult != "Should return 8" {
-		t.Errorf("expected first eval expected_result 'Should return 8', got %q", firstEval.ExpectedResult)
-	}
+	assert.Equal("add", firstEval.Name)
+	assert.Equal("What is 5 plus 3?", firstEval.Prompt)
+	assert.Equal("Should return 8", firstEval.ExpectedResult)
 }
 
 func TestLoadConfig_InvalidFile(t *testing.T) {
+	assert := require.New(t)
+
 	_, err := LoadConfig("testdata/nonexistent.yaml")
-	if err == nil {
-		t.Error("expected error for nonexistent file")
-	}
+	assert.Error(err)
 }
 
 func TestLoadConfig_InvalidExtension(t *testing.T) {
+	assert := require.New(t)
+
 	_, err := LoadConfig("testdata/test.txt")
-	if err == nil {
-		t.Error("expected error for invalid extension")
-	}
-	if !strings.Contains(err.Error(), "unsupported file extension") {
-		t.Errorf("expected 'unsupported file extension' error, got: %v", err)
-	}
+	assert.Error(err)
+	assert.Contains(err.Error(), "unsupported file extension")
 }
 
 func TestEvalClientConfig_Defaults(t *testing.T) {
@@ -114,63 +91,54 @@ func TestEvalClientConfig_Defaults(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := require.New(t)
+
 			client := NewEvalClient(tt.config)
 
-			if client.config.MaxSteps != tt.expectedSteps {
-				t.Errorf("expected MaxSteps %d, got %d", tt.expectedSteps, client.config.MaxSteps)
-			}
-			if client.config.MaxTokens != tt.expectedTokens {
-				t.Errorf("expected MaxTokens %d, got %d", tt.expectedTokens, client.config.MaxTokens)
-			}
+			assert.Equal(tt.expectedSteps, client.config.MaxSteps)
+			assert.Equal(tt.expectedTokens, client.config.MaxTokens)
 		})
 	}
 }
 
 func TestSchemaForEvalConfig(t *testing.T) {
-	schema, err := SchemaForEvalConfig()
-	if err != nil {
-		t.Fatalf("SchemaForEvalConfig() returned error: %v", err)
-	}
+	assert := require.New(t)
 
-	if schema == "" {
-		t.Fatal("SchemaForEvalConfig() returned empty schema")
-	}
+	schema, err := SchemaForEvalConfig()
+	assert.NoError(err)
+	assert.NotEmpty(schema)
 
 	t.Log("Generated JSON Schema:\n", schema)
 
 	// Verify it's valid JSON
 	var schemaMap map[string]any
-	if err := json.Unmarshal([]byte(schema), &schemaMap); err != nil {
-		t.Fatalf("SchemaForEvalConfig() returned invalid JSON: %v", err)
-	}
+	err = json.Unmarshal([]byte(schema), &schemaMap)
+	assert.NoError(err)
 
 	// Verify top-level metadata fields
-	if schemaURL, ok := schemaMap["$schema"].(string); !ok || schemaURL != "https://json-schema.org/draft/2020-12/schema" {
-		t.Errorf("expected $schema to be 'https://json-schema.org/draft/2020-12/schema', got %v", schemaMap["$schema"])
-	}
-	if title, ok := schemaMap["title"].(string); !ok || title != "MCP Evaluation Configuration" {
-		t.Errorf("expected title to be 'MCP Evaluation Configuration', got %v", schemaMap["title"])
-	}
-	if desc, ok := schemaMap["description"].(string); !ok || desc == "" {
-		t.Error("expected non-empty description field")
-	}
+	schemaURL, ok := schemaMap["$schema"].(string)
+	assert.True(ok)
+	assert.Equal("https://json-schema.org/draft/2020-12/schema", schemaURL)
+
+	title, ok := schemaMap["title"].(string)
+	assert.True(ok)
+	assert.Equal("MCP Evaluation Configuration", title)
+
+	desc, ok := schemaMap["description"].(string)
+	assert.True(ok)
+	assert.NotEmpty(desc)
 
 	// Verify it has expected JSON schema fields
-	if _, ok := schemaMap["properties"]; !ok {
-		t.Error("schema missing 'properties' field")
-	}
+	_, ok = schemaMap["properties"]
+	assert.True(ok)
 
 	// Verify it contains expected EvalConfig properties
 	properties, ok := schemaMap["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("properties field is not a map")
-	}
+	assert.True(ok)
 
 	expectedProperties := []string{"model", "grading_model", "timeout", "max_steps", "max_tokens", "mcp_server", "evals"}
 	for _, prop := range expectedProperties {
-		if _, ok := properties[prop]; !ok {
-			t.Errorf("schema missing expected property: %s", prop)
-		}
+		assert.Contains(properties, prop)
 	}
 
 	// Verify descriptions are present on key fields
@@ -188,44 +156,28 @@ func TestSchemaForEvalConfig(t *testing.T) {
 		var current any = properties
 		for i, key := range tc.path {
 			m, ok := current.(map[string]any)
-			if !ok {
-				t.Errorf("path %v: expected map at level %d, got %T", tc.path, i, current)
-				break
-			}
+			assert.True(ok, "path %v: expected map at level %d, got %T", tc.path, i, current)
 			current, ok = m[key]
-			if !ok {
-				t.Errorf("path %v: key %q not found", tc.path, key)
-				break
-			}
+			assert.True(ok, "path %v: key %q not found", tc.path, key)
 		}
 		if desc, ok := current.(string); ok {
-			if !strings.Contains(desc, tc.description) {
-				t.Errorf("path %v: expected description to contain %q, got %q", tc.path, tc.description, desc)
-			}
+			assert.Contains(desc, tc.description)
 		}
 	}
 }
 
 func TestValidateConfigFile_Valid(t *testing.T) {
-	// Test with the valid test configuration
+	assert := require.New(t)
+
 	result, err := ValidateConfigFile("testdata/mcp-test-evals.yaml")
-	if err != nil {
-		t.Fatalf("ValidateConfigFile failed: %v", err)
-	}
-
-	if !result.Valid {
-		t.Errorf("Expected valid config, but got %d errors:", len(result.Errors))
-		for _, verr := range result.Errors {
-			t.Errorf("  - [%s] %s", verr.Path, verr.Message)
-		}
-	}
-
-	if len(result.Errors) != 0 {
-		t.Errorf("Expected 0 errors, got %d", len(result.Errors))
-	}
+	assert.NoError(err)
+	assert.True(result.Valid)
+	assert.Empty(result.Errors)
 }
 
 func TestValidateConfigFile_MissingModel(t *testing.T) {
+	assert := require.New(t)
+
 	configContent := `
 mcp_server:
   command: echo
@@ -237,30 +189,17 @@ evals:
 `
 
 	tmpFile, err := os.CreateTemp("", "invalid-missing-model-*.yaml")
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
+	assert.NoError(err)
 	defer os.Remove(tmpFile.Name())
 
-	if _, err := tmpFile.WriteString(configContent); err != nil {
-		t.Fatalf("Failed to write test config: %v", err)
-	}
+	_, err = tmpFile.WriteString(configContent)
+	assert.NoError(err)
 	tmpFile.Close()
 
-	configPath := tmpFile.Name()
-
-	result, err := ValidateConfigFile(configPath)
-	if err != nil {
-		t.Fatalf("ValidateConfigFile failed: %v", err)
-	}
-
-	if result.Valid {
-		t.Error("Expected invalid config, but got valid")
-	}
-
-	if len(result.Errors) == 0 {
-		t.Error("Expected validation errors, but got none")
-	}
+	result, err := ValidateConfigFile(tmpFile.Name())
+	assert.NoError(err)
+	assert.False(result.Valid)
+	assert.NotEmpty(result.Errors)
 
 	t.Logf("Got %d validation errors (expected)", len(result.Errors))
 	for _, verr := range result.Errors {
@@ -269,6 +208,8 @@ evals:
 }
 
 func TestValidateConfigFile_MissingMCPServerCommand(t *testing.T) {
+	assert := require.New(t)
+
 	configContent := `
 model: claude-3-5-sonnet-20241022
 
@@ -281,30 +222,17 @@ evals:
 `
 
 	tmpFile, err := os.CreateTemp("", "invalid-missing-command-*.yaml")
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
+	assert.NoError(err)
 	defer os.Remove(tmpFile.Name())
 
-	if _, err := tmpFile.WriteString(configContent); err != nil {
-		t.Fatalf("Failed to write test config: %v", err)
-	}
+	_, err = tmpFile.WriteString(configContent)
+	assert.NoError(err)
 	tmpFile.Close()
 
-	configPath := tmpFile.Name()
-
-	result, err := ValidateConfigFile(configPath)
-	if err != nil {
-		t.Fatalf("ValidateConfigFile failed: %v", err)
-	}
-
-	if result.Valid {
-		t.Error("Expected invalid config, but got valid")
-	}
-
-	if len(result.Errors) == 0 {
-		t.Error("Expected validation errors, but got none")
-	}
+	result, err := ValidateConfigFile(tmpFile.Name())
+	assert.NoError(err)
+	assert.False(result.Valid)
+	assert.NotEmpty(result.Errors)
 
 	t.Logf("Got %d validation errors (expected)", len(result.Errors))
 	for _, verr := range result.Errors {
@@ -313,6 +241,8 @@ evals:
 }
 
 func TestValidateConfigFile_MissingEvals(t *testing.T) {
+	assert := require.New(t)
+
 	configContent := `
 model: claude-3-5-sonnet-20241022
 
@@ -322,30 +252,17 @@ mcp_server:
 `
 
 	tmpFile, err := os.CreateTemp("", "invalid-missing-evals-*.yaml")
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
+	assert.NoError(err)
 	defer os.Remove(tmpFile.Name())
 
-	if _, err := tmpFile.WriteString(configContent); err != nil {
-		t.Fatalf("Failed to write test config: %v", err)
-	}
+	_, err = tmpFile.WriteString(configContent)
+	assert.NoError(err)
 	tmpFile.Close()
 
-	configPath := tmpFile.Name()
-
-	result, err := ValidateConfigFile(configPath)
-	if err != nil {
-		t.Fatalf("ValidateConfigFile failed: %v", err)
-	}
-
-	if result.Valid {
-		t.Error("Expected invalid config, but got valid")
-	}
-
-	if len(result.Errors) == 0 {
-		t.Error("Expected validation errors, but got none")
-	}
+	result, err := ValidateConfigFile(tmpFile.Name())
+	assert.NoError(err)
+	assert.False(result.Valid)
+	assert.NotEmpty(result.Errors)
 
 	t.Logf("Got %d validation errors (expected)", len(result.Errors))
 	for _, verr := range result.Errors {
@@ -354,6 +271,8 @@ mcp_server:
 }
 
 func TestValidateConfigFile_InvalidEval(t *testing.T) {
+	assert := require.New(t)
+
 	configContent := `
 model: claude-3-5-sonnet-20241022
 
@@ -367,30 +286,17 @@ evals:
 `
 
 	tmpFile, err := os.CreateTemp("", "invalid-eval-*.yaml")
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
+	assert.NoError(err)
 	defer os.Remove(tmpFile.Name())
 
-	if _, err := tmpFile.WriteString(configContent); err != nil {
-		t.Fatalf("Failed to write test config: %v", err)
-	}
+	_, err = tmpFile.WriteString(configContent)
+	assert.NoError(err)
 	tmpFile.Close()
 
-	configPath := tmpFile.Name()
-
-	result, err := ValidateConfigFile(configPath)
-	if err != nil {
-		t.Fatalf("ValidateConfigFile failed: %v", err)
-	}
-
-	if result.Valid {
-		t.Error("Expected invalid config, but got valid")
-	}
-
-	if len(result.Errors) == 0 {
-		t.Error("Expected validation errors, but got none")
-	}
+	result, err := ValidateConfigFile(tmpFile.Name())
+	assert.NoError(err)
+	assert.False(result.Valid)
+	assert.NotEmpty(result.Errors)
 
 	t.Logf("Got %d validation errors (expected)", len(result.Errors))
 	for _, verr := range result.Errors {
@@ -399,37 +305,31 @@ evals:
 }
 
 func TestValidateConfigFile_InvalidFileExtension(t *testing.T) {
+	assert := require.New(t)
+
 	tmpFile, err := os.CreateTemp("", "config-*.txt")
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
+	assert.NoError(err)
 	defer os.Remove(tmpFile.Name())
 
-	if _, err := tmpFile.WriteString("test"); err != nil {
-		t.Fatalf("Failed to write test file: %v", err)
-	}
+	_, err = tmpFile.WriteString("test")
+	assert.NoError(err)
 	tmpFile.Close()
 
-	configPath := tmpFile.Name()
-
-	_, err = ValidateConfigFile(configPath)
-	if err == nil {
-		t.Error("Expected error for invalid file extension, but got none")
-	}
-
-	if !strings.Contains(err.Error(), "unsupported file extension") {
-		t.Errorf("Expected 'unsupported file extension' error, got: %v", err)
-	}
+	_, err = ValidateConfigFile(tmpFile.Name())
+	assert.Error(err)
+	assert.Contains(err.Error(), "unsupported file extension")
 }
 
 func TestValidateConfigFile_NonExistentFile(t *testing.T) {
+	assert := require.New(t)
+
 	_, err := ValidateConfigFile("nonexistent-file.yaml")
-	if err == nil {
-		t.Error("Expected error for non-existent file, but got none")
-	}
+	assert.Error(err)
 }
 
 func TestValidateConfigFile_InvalidYAML(t *testing.T) {
+	assert := require.New(t)
+
 	invalidYAML := `
 model: claude
   invalid: indentation
@@ -437,25 +337,20 @@ model: claude
 `
 
 	tmpFile, err := os.CreateTemp("", "invalid-*.yaml")
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
+	assert.NoError(err)
 	defer os.Remove(tmpFile.Name())
 
-	if _, err := tmpFile.WriteString(invalidYAML); err != nil {
-		t.Fatalf("Failed to write test file: %v", err)
-	}
+	_, err = tmpFile.WriteString(invalidYAML)
+	assert.NoError(err)
 	tmpFile.Close()
 
-	configPath := tmpFile.Name()
-
-	_, err = ValidateConfigFile(configPath)
-	if err == nil {
-		t.Error("Expected error for invalid YAML, but got none")
-	}
+	_, err = ValidateConfigFile(tmpFile.Name())
+	assert.Error(err)
 }
 
 func TestValidateConfigFile_JSONFormat(t *testing.T) {
+	assert := require.New(t)
+
 	configContent := `{
   "model": "claude-3-5-sonnet-20241022",
   "mcp_server": {
@@ -471,27 +366,14 @@ func TestValidateConfigFile_JSONFormat(t *testing.T) {
 }`
 
 	tmpFile, err := os.CreateTemp("", "valid-*.json")
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
+	assert.NoError(err)
 	defer os.Remove(tmpFile.Name())
 
-	if _, err := tmpFile.WriteString(configContent); err != nil {
-		t.Fatalf("Failed to write test config: %v", err)
-	}
+	_, err = tmpFile.WriteString(configContent)
+	assert.NoError(err)
 	tmpFile.Close()
 
-	configPath := tmpFile.Name()
-
-	result, err := ValidateConfigFile(configPath)
-	if err != nil {
-		t.Fatalf("ValidateConfigFile failed: %v", err)
-	}
-
-	if !result.Valid {
-		t.Errorf("Expected valid config, but got %d errors:", len(result.Errors))
-		for _, verr := range result.Errors {
-			t.Errorf("  - [%s] %s", verr.Path, verr.Message)
-		}
-	}
+	result, err := ValidateConfigFile(tmpFile.Name())
+	assert.NoError(err)
+	assert.True(result.Valid)
 }
