@@ -458,7 +458,11 @@ Here is the LLM's answer: %s%s`, evalResult.Prompt, evalResult.RawResponse, tool
 	trace.OutputTokens = int(resp.Usage.OutputTokens)
 
 	// Parse grade result
-	cleanedResponse := stripMarkdownCodeFence(rawResponse)
+	cleanedResponse, err := extractJSONFromResponse(rawResponse)
+	if err != nil {
+		trace.Error = err.Error()
+		return nil, trace, fmt.Errorf("failed to extract JSON from grading response: %w", err)
+	}
 
 	var gradeResult GradeResult
 	if err := json.Unmarshal([]byte(cleanedResponse), &gradeResult); err != nil {
@@ -467,15 +471,6 @@ Here is the LLM's answer: %s%s`, evalResult.Prompt, evalResult.RawResponse, tool
 	}
 
 	return &gradeResult, trace, nil
-}
-
-// stripMarkdownCodeFence removes markdown code fences from a string if present
-func stripMarkdownCodeFence(s string) string {
-	cleaned := strings.TrimSpace(s)
-	cleaned = strings.TrimPrefix(cleaned, "```json")
-	cleaned = strings.TrimPrefix(cleaned, "```")
-	cleaned = strings.TrimSuffix(cleaned, "```")
-	return strings.TrimSpace(cleaned)
 }
 
 type EvalResult struct {
