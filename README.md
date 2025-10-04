@@ -10,6 +10,14 @@ A Go library and CLI for evaluating Model Context Protocol (MCP) servers using C
 
 ## Installation
 
+### Using install script (recommended)
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/wolfeidau/go-mcp-evals/main/install.sh | sh
+```
+
+### Using Go
+
 ```bash
 go install github.com/wolfeidau/go-mcp-evals/cmd/mcp-evals@latest
 ```
