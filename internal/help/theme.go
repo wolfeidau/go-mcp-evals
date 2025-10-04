@@ -19,6 +19,9 @@ var (
 	Cherry      = lipgloss.Color("#FF388B")
 	BrightGreen = lipgloss.Color("#A6E22E")
 	DarkGreen   = lipgloss.Color("#5F8700")
+	Cardinal    = lipgloss.Color("#D70000")
+	Watermelon  = lipgloss.Color("#FF5F87")
+	Basil       = lipgloss.Color("#0CB37F")
 )
 
 // ColorScheme defines colors for different help elements
@@ -50,12 +53,12 @@ func DefaultColorScheme(c lipgloss.LightDarkFunc) ColorScheme {
 	return ColorScheme{
 		Title:       Charple,
 		Command:     c(Pony, Cheeky),
-		Flag:        c(lipgloss.Color("#0CB37F"), Guac),
+		Flag:        c(Basil, Guac),
 		Argument:    c(Charcoal, Ash),
 		Description: c(Charcoal, Ash),
 		Default:     c(Smoke, Squid),
 		Section:     c(DarkGreen, BrightGreen),
-		Error:       c(lipgloss.Color("#D70000"), lipgloss.Color("#FF5F87")),
+		Error:       c(Cardinal, Watermelon),
 	}
 }
 

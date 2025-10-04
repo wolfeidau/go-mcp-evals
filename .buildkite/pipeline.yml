@@ -46,3 +46,11 @@ steps:
           - go test -coverprofile coverage.out -coverpkg=./... ./...
           - go run github.com/nikolaydubina/go-cover-treemap -coverprofile coverage.out > cover-tree.svg
           - echo '<details><summary>Coverage tree map</summary><img src="artifact://cover-tree.svg" alt="Test coverage tree map" width="70%"></details>' | buildkite-agent annotate --style "info"
+
+      - key: usage
+        label: ":golang: cli usage"
+        env:
+          CLICOLOR_FORCE: 1
+        command: |
+          go run ./cmd/mcp-evals --help
+          go run ./cmd/mcp-evals run --help
