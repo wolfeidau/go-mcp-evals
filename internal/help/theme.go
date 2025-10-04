@@ -4,6 +4,7 @@ import (
 	"image/color"
 	"os"
 
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/lipgloss/v2"
 )
 
@@ -62,6 +63,20 @@ func DefaultColorScheme(c lipgloss.LightDarkFunc) ColorScheme {
 	}
 }
 
+// ANSI256ColorScheme returns a color scheme using ANSI256 colors for better terminal compatibility
+func ANSI256ColorScheme(c lipgloss.LightDarkFunc) ColorScheme {
+	return ColorScheme{
+		Title:       lipgloss.Color("99"),                            // purple
+		Command:     c(lipgloss.Color("205"), lipgloss.Color("213")), // magenta/pink
+		Flag:        c(lipgloss.Color("36"), lipgloss.Color("42")),   // cyan/green
+		Argument:    c(lipgloss.Color("240"), lipgloss.Color("250")), // gray
+		Description: c(lipgloss.Color("240"), lipgloss.Color("250")), // gray
+		Default:     c(lipgloss.Color("244"), lipgloss.Color("246")), // gray
+		Section:     c(lipgloss.Color("28"), lipgloss.Color("82")),   // green
+		Error:       c(lipgloss.Color("160"), lipgloss.Color("204")), // red/pink
+	}
+}
+
 // NewStyles creates a new Styles instance from a color scheme
 func NewStyles(scheme ColorScheme) Styles {
 	return Styles{
@@ -90,7 +105,20 @@ func NewStyles(scheme ColorScheme) Styles {
 	}
 }
 
-// DefaultStyles returns the default styled theme
+// DefaultStyles returns the default styled theme, automatically detecting color support
 func DefaultStyles() Styles {
-	return NewStyles(DefaultColorScheme(lipgloss.LightDark(lipgloss.HasDarkBackground(os.Stdin, os.Stdout))))
+	lightDark := lipgloss.LightDark(lipgloss.HasDarkBackground(os.Stdin, os.Stdout))
+
+	// Detect terminal color support
+	profile := colorprofile.Detect(os.Stdout, os.Environ())
+
+	// Use ANSI256 colors for terminals with limited color support
+	var scheme ColorScheme
+	if profile < colorprofile.TrueColor {
+		scheme = ANSI256ColorScheme(lightDark)
+	} else {
+		scheme = DefaultColorScheme(lightDark)
+	}
+
+	return NewStyles(scheme)
 }
