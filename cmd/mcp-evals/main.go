@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/alecthomas/kong"
 	"github.com/wolfeidau/go-mcp-evals/internal/commands"
+	"github.com/wolfeidau/go-mcp-evals/internal/help"
 )
 
 var (
@@ -22,11 +23,13 @@ type CLI struct {
 
 func main() {
 	cli := &CLI{}
+	styles := help.DefaultStyles()
 	ctx := kong.Parse(cli,
 		kong.Name("mcp-evals"),
 		kong.Description("Run evaluations against an MCP server"),
 		kong.UsageOnError(),
 		kong.Vars{"version": version},
+		kong.Help(help.Printer(styles)),
 	)
 
 	err := ctx.Run(&cli.Globals)
