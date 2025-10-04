@@ -1,7 +1,7 @@
-FROM golang:1.25.1@sha256:8305f5fa8ea63c7b5bc85bd223ccc62941f852318ebfbd22f53bbd0b358c07e1
+FROM golang:1.25.1@sha256:ab1f5c47de0f2693ed97c46a646bde2e4f380e40c173454d00352940a379af60
 
-COPY --from=goreleaser/goreleaser:v2.11.2@sha256:649e73dbf38046e0fdfbb74b74df89a51530ab6bd846dfc36319fe2d1221ca71 /usr/bin/goreleaser /usr/local/bin/goreleaser
-COPY --from=golangci/golangci-lint:v2.4.0@sha256:91460846c43b3de53eb77e968b17363e8747e6f3fc190575b52be60c49446e23 /usr/bin/golangci-lint /usr/local/bin/golangci-lint
+COPY --from=goreleaser/goreleaser:v2.12.5@sha256:812dda67b334c99b80571720977e6eee7e977a57e6b8e29a8b0c680a750300d7 /usr/bin/goreleaser /usr/local/bin/goreleaser
+COPY --from=golangci/golangci-lint:v2.5.0@sha256:0c8e590120a98ada5d0d9423e65dd957067e70c87efd692e83d5a311ddfc3151 /usr/bin/golangci-lint /usr/local/bin/golangci-lint
 COPY --from=ghcr.io/ko-build/ko:20b15e67194215721faba356b857fcf5d621dfaa /ko-app/ko /usr/local/bin/ko
 
 # install aws-cli
