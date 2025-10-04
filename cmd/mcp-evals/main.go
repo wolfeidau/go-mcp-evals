@@ -7,13 +7,24 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	evaluations "github.com/wolfeidau/go-mcp-evals"
 )
 
+var (
+	version = "dev"
+)
+
 func main() {
+	// Handle version flags first
+	if len(os.Args) >= 2 && (os.Args[1] == "-v" || os.Args[1] == "--version" || os.Args[1] == "version") {
+		printVersion()
+		return
+	}
+
 	// If no args or starts with a flag, default to run command
 	if len(os.Args) < 2 || (len(os.Args) >= 2 && os.Args[1][0] == '-') {
 		if err := runCommand(); err != nil {
@@ -39,6 +50,8 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+	case "version", "-v", "--version":
+		printVersion()
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -364,12 +377,34 @@ func repeatString(s string, count int) string {
 	return result
 }
 
+func printVersion() {
+	commit := "unknown"
+	date := "unknown"
+
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, setting := range info.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				commit = setting.Value
+				if len(commit) > 7 {
+					commit = commit[:7]
+				}
+			case "vcs.time":
+				date = setting.Value
+			}
+		}
+	}
+
+	fmt.Printf("mcp-evals %s (commit: %s, built: %s)\n", version, commit, date)
+}
+
 func printUsage() {
 	fmt.Fprintf(os.Stderr, "Usage: mcp-evals <command> [flags]\n\n")
 	fmt.Fprintf(os.Stderr, "Commands:\n")
 	fmt.Fprintf(os.Stderr, "  run       Run evaluations against an MCP server (default)\n")
 	fmt.Fprintf(os.Stderr, "  validate  Validate configuration file against JSON schema\n")
 	fmt.Fprintf(os.Stderr, "  schema    Generate JSON schema for evaluation configuration\n")
+	fmt.Fprintf(os.Stderr, "  version   Show version information\n")
 	fmt.Fprintf(os.Stderr, "  help      Show this help message\n\n")
 	fmt.Fprintf(os.Stderr, "Run 'mcp-evals <command> --help' for more information on a command.\n")
 }
