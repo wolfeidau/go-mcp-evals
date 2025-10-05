@@ -86,8 +86,7 @@ func TestPrintStyledReport(t *testing.T) {
 		plainOutput := stripANSI(output)
 
 		// Check for header
-		assert.Contains(plainOutput, "EVALUATION SUMMARY")
-		assert.Contains(plainOutput, "═")
+		assert.Contains(plainOutput, "# Evaluation Summary")
 
 		// Check for table headers
 		assert.Contains(plainOutput, "Name")
@@ -112,15 +111,15 @@ func TestPrintStyledReport(t *testing.T) {
 		assert.Contains(plainOutput, "NO GRADE")
 
 		// Check for overall statistics section
-		assert.Contains(plainOutput, "Overall Statistics")
+		assert.Contains(plainOutput, "## Overall Statistics")
 		assert.Contains(plainOutput, "Total Evaluations: 5")
-		assert.Contains(plainOutput, "Performance Metrics")
-		assert.Contains(plainOutput, "Tool Execution")
+		assert.Contains(plainOutput, "### Performance Metrics")
+		assert.Contains(plainOutput, "### Tool Execution")
 
 		// Should NOT contain detailed breakdown
-		assert.NotContains(plainOutput, "Detailed Breakdown")
-		assert.NotContains(plainOutput, "Execution Trace:")
-		assert.NotContains(plainOutput, "Grading Details:")
+		assert.NotContains(plainOutput, "## Detailed Breakdown")
+		assert.NotContains(plainOutput, "#### Execution Trace")
+		assert.NotContains(plainOutput, "#### Grading Details")
 	})
 
 	// Test verbose output
@@ -134,14 +133,14 @@ func TestPrintStyledReport(t *testing.T) {
 		plainOutput := stripANSI(output)
 
 		// Should contain everything from non-verbose
-		assert.Contains(plainOutput, "EVALUATION SUMMARY")
-		assert.Contains(plainOutput, "Overall Statistics")
+		assert.Contains(plainOutput, "# Evaluation Summary")
+		assert.Contains(plainOutput, "## Overall Statistics")
 
 		// Should contain detailed breakdown
-		assert.Contains(plainOutput, "Detailed Breakdown")
+		assert.Contains(plainOutput, "## Detailed Breakdown")
 
 		// Check for execution trace details
-		assert.Contains(plainOutput, "Execution Trace:")
+		assert.Contains(plainOutput, "#### Execution Trace")
 		assert.Contains(plainOutput, "Step 1:")
 		assert.Contains(plainOutput, "Step 2:")
 		assert.Contains(plainOutput, "Step 3:")
@@ -153,7 +152,7 @@ func TestPrintStyledReport(t *testing.T) {
 		assert.Contains(plainOutput, "✗ Failed")
 
 		// Check for grading details
-		assert.Contains(plainOutput, "Grading Details:")
+		assert.Contains(plainOutput, "#### Grading Details")
 		assert.Contains(plainOutput, "Accuracy")
 		assert.Contains(plainOutput, "Completeness")
 		assert.Contains(plainOutput, "Relevance")

@@ -19,45 +19,55 @@ import (
 func PrintStyledReport(results []evaluations.EvalRunResult, verbose bool) error {
 	styles := help.DefaultStyles()
 
-	// Print header
-	printReportHeader(styles)
+	// Build the complete report content
+	var content strings.Builder
 
-	// Print summary table
-	printSummaryTable(results, styles)
-
-	// Print overall statistics
-	printOverallStats(results, styles)
+	// Capture output for each section
+	content.WriteString(captureReportHeader(styles))
+	content.WriteString(captureSummaryTable(results, styles))
+	content.WriteString(captureOverallStats(results, styles))
 
 	// Print detailed view if verbose
 	if verbose {
-		printDetailedBreakdown(results, styles)
+		content.WriteString(captureDetailedBreakdown(results, styles))
 	}
+
+	// Wrap the entire output with margins
+	marginStyle := lipgloss.NewStyle().
+		MarginTop(1).
+		MarginRight(4).
+		MarginBottom(1).
+		MarginLeft(4)
+
+	fmt.Println(marginStyle.Render(content.String()))
 
 	return nil
 }
 
-func printReportHeader(styles help.Styles) {
-	const headerWidth = 100
-
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(help.Charple).
-		Align(lipgloss.Center).
-		Width(headerWidth)
-
-	borderStyle := lipgloss.NewStyle().
-		Foreground(help.Charple)
-
-	title := titleStyle.Render("EVALUATION SUMMARY")
-	border := borderStyle.Render(strings.Repeat("═", headerWidth))
-
-	fmt.Println(border)
-	fmt.Println(title)
-	fmt.Println(border)
-	fmt.Println()
+// Heading helpers for consistent spacing
+func h1(styles help.Styles, text string) string {
+	return styles.Heading.Render("# "+text) + "\n\n"
 }
 
-func printSummaryTable(results []evaluations.EvalRunResult, styles help.Styles) {
+func h2(styles help.Styles, text string) string {
+	return styles.Heading.Render("## "+text) + "\n\n"
+}
+
+func h3(styles help.Styles, text string) string {
+	return styles.Heading.Render("### "+text) + "\n\n"
+}
+
+func h4(styles help.Styles, text string) string {
+	return styles.Heading.Render("#### "+text) + "\n\n"
+}
+
+func captureReportHeader(styles help.Styles) string {
+	return h1(styles, "Evaluation Summary")
+}
+
+func captureSummaryTable(results []evaluations.EvalRunResult, styles help.Styles) string {
+	var output strings.Builder
+
 	// Build table rows
 	rows := make([][]string, 0, len(results))
 	for _, result := range results {
@@ -67,13 +77,13 @@ func printSummaryTable(results []evaluations.EvalRunResult, styles help.Styles) 
 	// Create table with lipgloss
 	t := table.New().
 		Border(lipgloss.NormalBorder()).
-		BorderStyle(lipgloss.NewStyle().Foreground(help.Charple)).
+		BorderStyle(styles.Heading).
 		StyleFunc(func(row, col int) lipgloss.Style {
 			if row == table.HeaderRow {
 				// Header row
 				return lipgloss.NewStyle().
 					Bold(true).
-					Foreground(help.Charple).
+					Foreground(styles.Heading.GetForeground()).
 					Align(lipgloss.Left).Padding(0, 2)
 			}
 			return lipgloss.NewStyle().Align(lipgloss.Left).Padding(0, 2)
@@ -81,8 +91,9 @@ func printSummaryTable(results []evaluations.EvalRunResult, styles help.Styles) 
 		Headers("Name", "Status", "Avg", "Steps", "Tools", "Success%", "Tokens (I→O)").
 		Rows(rows...)
 
-	fmt.Println(t)
-	fmt.Println()
+	output.WriteString(t.String() + "\n")
+	output.WriteString("\n")
+	return output.String()
 }
 
 func buildResultRow(result evaluations.EvalRunResult, styles help.Styles) []string {
@@ -99,17 +110,17 @@ func buildResultRow(result evaluations.EvalRunResult, styles help.Styles) []stri
 
 	// Handle no trace case
 	if result.Trace == nil {
-		status := lipgloss.NewStyle().Foreground(help.Squid).Render("NO TRACE")
+		status := styles.Muted.Render("NO TRACE")
 		return []string{name, status, "-", "-", "-", "-", "-"}
 	}
 
 	// Calculate metrics
 	avgScoreVal := 0.0
-	statusStr := lipgloss.NewStyle().Foreground(help.Squid).Render("NO GRADE")
+	statusStr := styles.Muted.Render("NO GRADE")
 	if result.Grade != nil {
 		avgScoreVal = avgScore(result.Grade)
 		if avgScoreVal >= 3.0 {
-			statusStr = lipgloss.NewStyle().Foreground(help.Guac).Render("PASS")
+			statusStr = styles.Success.Render("PASS")
 		} else {
 			statusStr = styles.Error.Render("FAIL")
 		}
@@ -132,7 +143,9 @@ func buildResultRow(result evaluations.EvalRunResult, styles help.Styles) []stri
 	return []string{name, statusStr, avgStr, stepsStr, toolsStr, successStr, tokenStr}
 }
 
-func printOverallStats(results []evaluations.EvalRunResult, styles help.Styles) {
+func captureOverallStats(results []evaluations.EvalRunResult, styles help.Styles) string {
+	var output strings.Builder
+
 	// Calculate overall statistics
 	totalEvals := len(results)
 	errorCount := 0
@@ -179,139 +192,131 @@ func printOverallStats(results []evaluations.EvalRunResult, styles help.Styles) 
 		}
 	}
 
-	// Print statistics box
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(help.Charple).
-		Padding(1, 2)
-
-	var statsBuilder strings.Builder
-
-	// Section header
-	sectionHeader := styles.Section.Render("Overall Statistics")
-	statsBuilder.WriteString(sectionHeader + "\n\n")
+	// Build statistics output
+	output.WriteString(h2(styles, "Overall Statistics"))
 
 	// Total evaluations
-	statsBuilder.WriteString(fmt.Sprintf("Total Evaluations: %d\n", totalEvals))
+	output.WriteString(fmt.Sprintf("Total Evaluations: %d\n", totalEvals))
 
 	// Pass/Fail/Error breakdown
 	if passCount > 0 {
-		passStr := lipgloss.NewStyle().Foreground(help.Guac).Render(fmt.Sprintf("✓ Pass:   %d (%.0f%%)", passCount, float64(passCount)/float64(totalEvals)*100))
-		statsBuilder.WriteString(fmt.Sprintf("  %s\n", passStr))
+		passStr := styles.Success.Render(fmt.Sprintf("✓ Pass:   %d (%.0f%%)", passCount, float64(passCount)/float64(totalEvals)*100))
+		output.WriteString(fmt.Sprintf("  %s\n", passStr))
 	}
 	if failCount > 0 {
 		failStr := styles.Error.Render(fmt.Sprintf("✗ Fail:   %d (%.0f%%)", failCount, float64(failCount)/float64(totalEvals)*100))
-		statsBuilder.WriteString(fmt.Sprintf("  %s\n", failStr))
+		output.WriteString(fmt.Sprintf("  %s\n", failStr))
 	}
 	if errorCount > 0 {
 		errorStr := styles.Error.Render(fmt.Sprintf("⚠ Error:  %d (%.0f%%)", errorCount, float64(errorCount)/float64(totalEvals)*100))
-		statsBuilder.WriteString(fmt.Sprintf("  %s\n", errorStr))
+		output.WriteString(fmt.Sprintf("  %s\n", errorStr))
 	}
 	if noGradeCount > 0 {
-		noGradeStr := lipgloss.NewStyle().Foreground(help.Squid).Render(fmt.Sprintf("○ No Grade: %d", noGradeCount))
-		statsBuilder.WriteString(fmt.Sprintf("  %s\n", noGradeStr))
+		noGradeStr := styles.Muted.Render(fmt.Sprintf("○ No Grade: %d", noGradeCount))
+		output.WriteString(fmt.Sprintf("  %s\n", noGradeStr))
 	}
+	output.WriteString("\n")
 
 	// Performance metrics
 	if totalInputTokens > 0 || totalDuration > 0 {
-		statsBuilder.WriteString("\n" + styles.Section.Render("Performance Metrics") + "\n")
+		output.WriteString(h3(styles, "Performance Metrics"))
 
 		if totalDuration > 0 {
-			statsBuilder.WriteString(fmt.Sprintf("  Total Duration:     %s\n", formatDuration(totalDuration)))
+			output.WriteString(fmt.Sprintf("Total Duration:     %s\n", formatDuration(totalDuration)))
 		}
 
 		if totalInputTokens > 0 {
-			statsBuilder.WriteString(fmt.Sprintf("  Total Tokens:       %s (I) → %s (O)\n",
+			output.WriteString(fmt.Sprintf("Total Tokens:       %s (I) → %s (O)\n",
 				formatTokens(totalInputTokens),
 				formatTokens(totalOutputTokens)))
 
 			avgInput := totalInputTokens / totalEvals
 			avgOutput := totalOutputTokens / totalEvals
-			statsBuilder.WriteString(fmt.Sprintf("  Avg Tokens/Eval:    %s (I) → %s (O)\n",
+			output.WriteString(fmt.Sprintf("Avg Tokens/Eval:    %s (I) → %s (O)\n",
 				formatTokens(avgInput),
 				formatTokens(avgOutput)))
 		}
+		output.WriteString("\n")
 	}
 
 	// Tool execution stats
 	if totalToolCalls > 0 {
-		statsBuilder.WriteString("\n" + styles.Section.Render("Tool Execution") + "\n")
-		statsBuilder.WriteString(fmt.Sprintf("  Total Tool Calls:   %d\n", totalToolCalls))
+		output.WriteString(h3(styles, "Tool Execution"))
+		output.WriteString(fmt.Sprintf("Total Tool Calls:   %d\n", totalToolCalls))
 
 		successRateOverall := float64(successfulToolCalls) / float64(totalToolCalls) * 100
 		successRateStr := fmt.Sprintf("%.0f%% (%d/%d)", successRateOverall, successfulToolCalls, totalToolCalls)
 		if successRateOverall >= 80 {
-			successRateStr = lipgloss.NewStyle().Foreground(help.Guac).Render(successRateStr)
+			successRateStr = styles.Success.Render(successRateStr)
 		} else if successRateOverall < 50 {
 			successRateStr = styles.Error.Render(successRateStr)
 		}
-		statsBuilder.WriteString(fmt.Sprintf("  Success Rate:       %s\n", successRateStr))
+		output.WriteString(fmt.Sprintf("Success Rate:       %s\n", successRateStr))
 
 		if totalToolCalls > successfulToolCalls {
 			failedCalls := totalToolCalls - successfulToolCalls
-			statsBuilder.WriteString(fmt.Sprintf("  Failed Calls:       %s\n",
+			output.WriteString(fmt.Sprintf("Failed Calls:       %s\n",
 				styles.Error.Render(fmt.Sprintf("%d", failedCalls))))
+		}
+		output.WriteString("\n")
+	}
+
+	return output.String()
+}
+
+func captureDetailedBreakdown(results []evaluations.EvalRunResult, styles help.Styles) string {
+	var output strings.Builder
+
+	output.WriteString(h2(styles, "Detailed Breakdown"))
+
+	for i, result := range results {
+		output.WriteString(captureEvalDetail(result, styles))
+		// Add separator between evals except after the last one
+		if i < len(results)-1 {
+			output.WriteString(strings.Repeat("─", 80) + "\n")
+			output.WriteString("\n")
 		}
 	}
 
-	fmt.Println(boxStyle.Render(statsBuilder.String()))
-	fmt.Println()
+	return output.String()
 }
 
-func printDetailedBreakdown(results []evaluations.EvalRunResult, styles help.Styles) {
-	fmt.Println(styles.Section.Render("Detailed Breakdown"))
-	fmt.Println()
-
-	for _, result := range results {
-		printEvalDetail(result, styles)
-	}
-}
-
-func printEvalDetail(result evaluations.EvalRunResult, styles help.Styles) {
-	const detailBoxWidth = 100
-
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(help.Charple).
-		Padding(1, 2).
-		Width(detailBoxWidth)
-
-	var content strings.Builder
+func captureEvalDetail(result evaluations.EvalRunResult, styles help.Styles) string {
+	var output strings.Builder
 
 	// Header
-	header := lipgloss.NewStyle().Bold(true).Foreground(help.Charple).Render(fmt.Sprintf("Eval: %s", result.Eval.Name))
-	content.WriteString(header + "\n")
+	output.WriteString(h3(styles, result.Eval.Name))
 
 	if result.Eval.Description != "" {
-		content.WriteString(lipgloss.NewStyle().Foreground(help.Squid).Render(result.Eval.Description) + "\n")
+		output.WriteString(styles.Muted.Render(result.Eval.Description) + "\n")
+		output.WriteString("\n")
 	}
-	content.WriteString("\n")
 
 	// Status
 	switch {
 	case result.Error != nil:
-		content.WriteString(fmt.Sprintf("Status: %s\n", styles.Error.Render("ERROR")))
-		content.WriteString(fmt.Sprintf("Error: %s\n", result.Error.Error()))
+		output.WriteString(fmt.Sprintf("Status: %s\n", styles.Error.Render("ERROR")))
+		output.WriteString(fmt.Sprintf("Error: %s\n", result.Error.Error()))
 	case result.Grade != nil:
 		avg := avgScore(result.Grade)
 		statusText := "PASS"
-		statusStyle := lipgloss.NewStyle().Foreground(help.Guac)
+		statusStyle := styles.Success
 		if avg < 3.0 {
 			statusText = "FAIL"
 			statusStyle = styles.Error
 		}
-		content.WriteString(fmt.Sprintf("Status: %s (%.1f/5)\n", statusStyle.Render(statusText), avg))
+		output.WriteString(fmt.Sprintf("Status: %s (%.1f/5)\n", statusStyle.Render(statusText), avg))
 	default:
-		content.WriteString(fmt.Sprintf("Status: %s\n", lipgloss.NewStyle().Foreground(help.Squid).Render("NO GRADE")))
+		output.WriteString(fmt.Sprintf("Status: %s\n", styles.Muted.Render("NO GRADE")))
 	}
-	content.WriteString("\n")
+	output.WriteString("\n")
 
 	// Execution trace
 	if result.Trace != nil && len(result.Trace.Steps) > 0 {
-		content.WriteString(styles.Section.Render("Execution Trace:") + "\n")
+		output.WriteString(h4(styles, "Execution Trace"))
 
 		for _, step := range result.Trace.Steps {
-			content.WriteString(fmt.Sprintf("  Step %d: (%s, %s→%s tokens)\n",
+			output.WriteString(fmt.Sprintf("Step %d: (%s, %s→%s tokens)\n",
 				step.StepNumber,
 				formatDuration(step.Duration),
 				formatTokens(step.InputTokens),
@@ -320,32 +325,32 @@ func printEvalDetail(result evaluations.EvalRunResult, styles help.Styles) {
 			// Show tool calls
 			for _, tool := range step.ToolCalls {
 				if tool.Success {
-					content.WriteString(fmt.Sprintf("    Tool: %s\n", tool.ToolName))
-					content.WriteString(fmt.Sprintf("      %s (%s)\n",
-						lipgloss.NewStyle().Foreground(help.Guac).Render("✓ Success"),
+					output.WriteString(fmt.Sprintf("  Tool: %s\n", tool.ToolName))
+					output.WriteString(fmt.Sprintf("    %s (%s)\n",
+						styles.Success.Render("✓ Success"),
 						formatDuration(tool.Duration)))
 				} else {
-					content.WriteString(fmt.Sprintf("    Tool: %s\n", tool.ToolName))
-					content.WriteString(fmt.Sprintf("      %s (%s)\n",
+					output.WriteString(fmt.Sprintf("  Tool: %s\n", tool.ToolName))
+					output.WriteString(fmt.Sprintf("    %s (%s)\n",
 						styles.Error.Render("✗ Failed"),
 						formatDuration(tool.Duration)))
 					if tool.Error != "" {
-						content.WriteString(fmt.Sprintf("      Error: %s\n", tool.Error))
+						output.WriteString(fmt.Sprintf("    Error: %s\n", tool.Error))
 					}
 				}
 			}
 
 			// Mark final answer step
 			if step.StopReason == "end_turn" {
-				content.WriteString("    " + lipgloss.NewStyle().Foreground(help.Guac).Render("→ Final answer") + "\n")
+				output.WriteString("  " + styles.Success.Render("→ Final answer") + "\n")
 			}
 		}
-		content.WriteString("\n")
+		output.WriteString("\n")
 	}
 
 	// Grading details
 	if result.Grade != nil {
-		content.WriteString(styles.Section.Render("Grading Details:") + "\n")
+		output.WriteString(h4(styles, "Grading Details"))
 
 		grades := []struct {
 			name  string
@@ -359,20 +364,29 @@ func printEvalDetail(result evaluations.EvalRunResult, styles help.Styles) {
 		}
 
 		for _, g := range grades {
-			scoreColor := getScoreColor(g.value)
+			scoreColor := getScoreColor(g.value, styles)
 			bar := makeScoreBar(g.value)
 			scoredBar := lipgloss.NewStyle().Foreground(scoreColor).Render(bar)
-			content.WriteString(fmt.Sprintf("  %-13s %d  %s\n", g.name+":", g.value, scoredBar))
+			output.WriteString(fmt.Sprintf("%-13s %d  %s\n", g.name+":", g.value, scoredBar))
 		}
+
+		comments := lipgloss.NewStyle().
+			Padding(1, 0, 0, 0).
+			Render
+
+		paragraph := lipgloss.NewStyle().
+			Width(78).
+			Padding(1, 0, 0, 2).
+			Render
 
 		if result.Grade.OverallComment != "" {
-			content.WriteString(fmt.Sprintf("\n  Comments: %s\n",
-				wrapText(result.Grade.OverallComment, 70)))
+			output.WriteString(comments("Comments:\n"))
+			output.WriteString(paragraph(result.Grade.OverallComment) + "\n")
 		}
+		output.WriteString("\n")
 	}
 
-	fmt.Println(boxStyle.Render(content.String()))
-	fmt.Println()
+	return output.String()
 }
 
 // LoadTraceFile loads a trace file and reconstructs an EvalRunResult
@@ -460,14 +474,14 @@ func avgScore(grade *evaluations.GradeResult) float64 {
 	return float64(sum) / 5.0
 }
 
-func getScoreColor(score int) color.Color {
+func getScoreColor(score int, styles help.Styles) color.Color {
 	switch {
 	case score >= 4:
-		return help.Guac // Green
+		return styles.Success.GetForeground()
 	case score == 3:
-		return help.Squid // Gray
+		return styles.Muted.GetForeground()
 	default:
-		return help.Cardinal // Red
+		return styles.Error.GetForeground()
 	}
 }
 

@@ -23,9 +23,10 @@ var (
 	Cardinal    = lipgloss.Color("#D70000")
 	Watermelon  = lipgloss.Color("#FF5F87")
 	Basil       = lipgloss.Color("#0CB37F")
+	Anchovy     = lipgloss.Color("#719AFC")
 )
 
-// ColorScheme defines colors for different help elements
+// ColorScheme defines colors for different help elements and reporting
 type ColorScheme struct {
 	Title       color.Color
 	Command     color.Color
@@ -35,9 +36,12 @@ type ColorScheme struct {
 	Default     color.Color
 	Section     color.Color
 	Error       color.Color
+	Success     color.Color
+	Muted       color.Color
+	Heading     color.Color
 }
 
-// Styles contains all the lipgloss styles for help output
+// Styles contains all the lipgloss styles for help output and reporting
 type Styles struct {
 	Title       lipgloss.Style
 	Command     lipgloss.Style
@@ -47,12 +51,15 @@ type Styles struct {
 	Default     lipgloss.Style
 	Section     lipgloss.Style
 	Error       lipgloss.Style
+	Success     lipgloss.Style
+	Muted       lipgloss.Style
+	Heading     lipgloss.Style
 }
 
 // DefaultColorScheme returns a color scheme adapted from charm fang theme
 func DefaultColorScheme(c lipgloss.LightDarkFunc) ColorScheme {
 	return ColorScheme{
-		Title:       Charple,
+		Title:       c(Anchovy, Charple),
 		Command:     c(Pony, Cheeky),
 		Flag:        c(Basil, Guac),
 		Argument:    c(Charcoal, Ash),
@@ -60,6 +67,9 @@ func DefaultColorScheme(c lipgloss.LightDarkFunc) ColorScheme {
 		Default:     c(Smoke, Squid),
 		Section:     c(DarkGreen, BrightGreen),
 		Error:       c(Cardinal, Watermelon),
+		Success:     c(Basil, Guac),
+		Muted:       c(Smoke, Squid),
+		Heading:     c(Anchovy, Charple),
 	}
 }
 
@@ -74,6 +84,9 @@ func ANSI256ColorScheme(c lipgloss.LightDarkFunc) ColorScheme {
 		Default:     c(lipgloss.Color("244"), lipgloss.Color("246")), // gray
 		Section:     c(lipgloss.Color("28"), lipgloss.Color("82")),   // green
 		Error:       c(lipgloss.Color("160"), lipgloss.Color("204")), // red/pink
+		Success:     c(lipgloss.Color("36"), lipgloss.Color("42")),   // cyan/green
+		Muted:       c(lipgloss.Color("244"), lipgloss.Color("246")), // gray
+		Heading:     lipgloss.Color("99"),                            // purple
 	}
 }
 
@@ -101,6 +114,13 @@ func NewStyles(scheme ColorScheme) Styles {
 			Underline(true),
 		Error: lipgloss.NewStyle().
 			Foreground(scheme.Error).
+			Bold(true),
+		Success: lipgloss.NewStyle().
+			Foreground(scheme.Success),
+		Muted: lipgloss.NewStyle().
+			Foreground(scheme.Muted),
+		Heading: lipgloss.NewStyle().
+			Foreground(scheme.Heading).
 			Bold(true),
 	}
 }
