@@ -94,6 +94,55 @@ jq '.steps | sort_by(.duration) | reverse | .[0] | {step: .step_number, duration
 4. **Model comparison**: Compare traces from different models to see behavioral differences
 5. **Audit trails**: Complete record of all interactions for compliance
 
+## Test Fixtures
+
+The `internal/reporting/testdata/` directory contains example trace files used for testing the reporting system. These fixtures demonstrate different evaluation scenarios and can be used with the CLI for testing.
+
+### Example Trace Files
+
+- `weather-forecast.json` - Successful evaluation (PASS) with 100% tool success rate
+- `database-query.json` - Marginal pass (3.0 avg) with failed tool call recovery
+- `api-integration-test.json` - Failed evaluation (FAIL) with authentication error
+- `connection-timeout.json` - Error case with no trace data
+- `simple-echo-test.json` - Evaluation without grading
+
+### Testing with Fixtures
+
+Generate reports from example traces:
+
+```bash
+# Single file with verbose output
+./mcp-evals report --verbose \
+  --trace-files internal/reporting/testdata/weather-forecast.json
+
+# All fixtures using a loop
+./mcp-evals report --verbose \
+  $(for f in internal/reporting/testdata/*.json; do echo --trace-files $f; done)
+```
+
+### Fixture Format
+
+Fixtures include the complete eval result structure:
+
+```json
+{
+  "eval": {
+    "name": "weather-forecast",
+    "description": "Test weather API integration",
+    "prompt": "Get the 5-day weather forecast for San Francisco"
+  },
+  "grade": {
+    "accuracy": 5,
+    "completeness": 5,
+    "relevance": 5,
+    "clarity": 4,
+    "reasoning": 5,
+    "overall_comments": "The response accurately uses weather API tools..."
+  },
+  "trace": { /* trace data */ }
+}
+```
+
 ## Note
 
-These files are gitignored and not committed to the repository. They're generated fresh each time you run E2E tests.
+Runtime trace files in `traces/` are gitignored and not committed to the repository. They're generated fresh each time you run E2E tests. Test fixtures in `internal/reporting/testdata/` are committed for testing purposes.

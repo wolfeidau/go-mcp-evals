@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss/v2"
+	"github.com/charmbracelet/lipgloss/v2/table"
 	evaluations "github.com/wolfeidau/go-mcp-evals"
 	"github.com/wolfeidau/go-mcp-evals/internal/help"
 )
@@ -36,66 +37,70 @@ func PrintStyledReport(results []evaluations.EvalRunResult, verbose bool) error 
 }
 
 func printReportHeader(styles help.Styles) {
-	header := lipgloss.NewStyle().
+	const headerWidth = 100
+
+	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(help.Charple).
-		Padding(0, 1).
-		Render("EVALUATION SUMMARY")
+		Align(lipgloss.Center).
+		Width(headerWidth)
 
-	border := strings.Repeat("═", 80)
+	borderStyle := lipgloss.NewStyle().
+		Foreground(help.Charple)
+
+	title := titleStyle.Render("EVALUATION SUMMARY")
+	border := borderStyle.Render(strings.Repeat("═", headerWidth))
+
 	fmt.Println(border)
-	fmt.Println(header)
+	fmt.Println(title)
 	fmt.Println(border)
 	fmt.Println()
 }
 
 func printSummaryTable(results []evaluations.EvalRunResult, styles help.Styles) {
-	// Print table header
-	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(help.Charple)
-	fmt.Printf("%s  %s  %s  %s  %s  %s  %s\n",
-		padRight(headerStyle.Render("Name"), 20),
-		padRight(headerStyle.Render("Status"), 10),
-		padRight(headerStyle.Render("Avg"), 6),
-		padRight(headerStyle.Render("Steps"), 6),
-		padRight(headerStyle.Render("Tools"), 6),
-		padRight(headerStyle.Render("Success%"), 9),
-		padRight(headerStyle.Render("Tokens (I→O)"), 18),
-	)
-
-	fmt.Println(strings.Repeat("─", 90))
-
-	// Print each result
+	// Build table rows
+	rows := make([][]string, 0, len(results))
 	for _, result := range results {
-		printResultRow(result, styles)
+		rows = append(rows, buildResultRow(result, styles))
 	}
 
+	// Create table with lipgloss
+	t := table.New().
+		Border(lipgloss.NormalBorder()).
+		BorderStyle(lipgloss.NewStyle().Foreground(help.Charple)).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			if row == table.HeaderRow {
+				// Header row
+				return lipgloss.NewStyle().
+					Bold(true).
+					Foreground(help.Charple).
+					Align(lipgloss.Left).Padding(0, 2)
+			}
+			return lipgloss.NewStyle().Align(lipgloss.Left).Padding(0, 2)
+		}).
+		Headers("Name", "Status", "Avg", "Steps", "Tools", "Success%", "Tokens (I→O)").
+		Rows(rows...)
+
+	fmt.Println(t)
 	fmt.Println()
 }
 
-func printResultRow(result evaluations.EvalRunResult, styles help.Styles) {
+func buildResultRow(result evaluations.EvalRunResult, styles help.Styles) []string {
 	name := result.Eval.Name
-	if len(name) > 20 {
-		name = name[:17] + "..."
+	if len(name) > 25 {
+		name = name[:22] + "..."
 	}
 
 	// Handle error case
 	if result.Error != nil {
 		status := styles.Error.Render("ERROR")
-		fmt.Printf("%s  %s  %s\n",
-			padRight(name, 20),
-			padRight(status, 18), // Account for ANSI codes
-			result.Error.Error())
-		return
+		return []string{name, status, "-", "-", "-", "-", "-"}
 	}
 
 	// Handle no trace case
 	if result.Trace == nil {
 		status := lipgloss.NewStyle().Foreground(help.Squid).Render("NO TRACE")
-		fmt.Printf("%s  %s  %s\n",
-			padRight(name, 20),
-			padRight(status, 18),
-			"-")
-		return
+		return []string{name, status, "-", "-", "-", "-", "-"}
 	}
 
 	// Calculate metrics
@@ -113,24 +118,18 @@ func printResultRow(result evaluations.EvalRunResult, styles help.Styles) {
 	trace := result.Trace
 	successRate := calculateToolSuccessRate(trace)
 
-	// Format token counts
-	tokenStr := formatTokenCounts(trace.TotalInputTokens, trace.TotalOutputTokens)
-
-	// Print row
+	// Format values
 	avgStr := "-"
 	if result.Grade != nil {
 		avgStr = fmt.Sprintf("%.1f", avgScoreVal)
 	}
 
-	fmt.Printf("%s  %s  %s  %s  %s  %s     %s\n",
-		padRight(name, 20),
-		padRight(statusStr, 18), // Account for ANSI codes
-		padRight(avgStr, 6),
-		padRight(fmt.Sprintf("%d", trace.StepCount), 6),
-		padRight(fmt.Sprintf("%d", trace.ToolCallCount), 6),
-		padRight(fmt.Sprintf("%d%%", int(successRate)), 9),
-		tokenStr,
-	)
+	stepsStr := fmt.Sprintf("%d", trace.StepCount)
+	toolsStr := fmt.Sprintf("%d", trace.ToolCallCount)
+	successStr := fmt.Sprintf("%d%%", int(successRate))
+	tokenStr := formatTokenCounts(trace.TotalInputTokens, trace.TotalOutputTokens)
+
+	return []string{name, statusStr, avgStr, stepsStr, toolsStr, successStr, tokenStr}
 }
 
 func printOverallStats(results []evaluations.EvalRunResult, styles help.Styles) {
@@ -269,11 +268,13 @@ func printDetailedBreakdown(results []evaluations.EvalRunResult, styles help.Sty
 }
 
 func printEvalDetail(result evaluations.EvalRunResult, styles help.Styles) {
+	const detailBoxWidth = 100
+
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(help.Charple).
 		Padding(1, 2).
-		Width(80)
+		Width(detailBoxWidth)
 
 	var content strings.Builder
 
@@ -482,13 +483,6 @@ func makeScoreBar(score int) string {
 		}
 	}
 	return bar
-}
-
-func padRight(s string, width int) string {
-	if len(s) >= width {
-		return s
-	}
-	return s + strings.Repeat(" ", width-len(s))
 }
 
 func wrapText(text string, width int) string {

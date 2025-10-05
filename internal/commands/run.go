@@ -15,10 +15,12 @@ import (
 
 // RunCmd handles the run command
 type RunCmd struct {
-	Config  string `help:"Path to evaluation configuration file (YAML or JSON)" required:"" type:"path"`
-	APIKey  string `help:"Anthropic API key (overrides ANTHROPIC_API_KEY env var)"`
-	BaseURL string `help:"Base URL for Anthropic API (overrides ANTHROPIC_BASE_URL env var)"`
-	Verbose bool   `help:"Show detailed per-eval breakdown" short:"v"`
+	Quiet    bool   `help:"Suppress progress output, only show summary" short:"q"`
+	TraceDir string `help:"Directory to write trace files" type:"path"`
+	Config   string `help:"Path to evaluation configuration file (YAML or JSON)" required:"" type:"path"`
+	APIKey   string `help:"Anthropic API key (overrides ANTHROPIC_API_KEY env var)"`
+	BaseURL  string `help:"Base URL for Anthropic API (overrides ANTHROPIC_BASE_URL env var)"`
+	Verbose  bool   `help:"Show detailed per-eval breakdown" short:"v"`
 }
 
 // Run executes the run command
@@ -56,18 +58,18 @@ func (r *RunCmd) Run(globals *Globals) error {
 	client := createClient(config, r.APIKey, resolvedBaseURL)
 
 	// Run evaluations
-	if !globals.Quiet {
+	if !r.Quiet {
 		fmt.Printf("Running %d evaluation(s)...\n\n", len(config.Evals))
 	}
 
-	results, err := runEvals(ctx, client, config.Evals, globals.Quiet)
+	results, err := runEvals(ctx, client, config.Evals, r.Quiet)
 	if err != nil {
 		return err
 	}
 
 	// Write traces if directory specified
-	if globals.TraceDir != "" {
-		if err := writeTraces(results, globals.TraceDir); err != nil {
+	if r.TraceDir != "" {
+		if err := writeTraces(results, r.TraceDir); err != nil {
 			log.Error().Err(err).Msg("failed to write traces")
 			return fmt.Errorf("failed to write traces: %w", err)
 		}

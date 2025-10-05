@@ -1,0 +1,76 @@
+{
+  "eval": {
+    "name": "weather-forecast",
+    "description": "Test weather API integration with forecast data retrieval",
+    "prompt": "Get the 5-day weather forecast for San Francisco",
+    "mcp_server": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-weather"]
+    }
+  },
+  "grade": {
+    "accuracy": 5,
+    "completeness": 5,
+    "relevance": 5,
+    "clarity": 4,
+    "reasoning": 5,
+    "overall_comments": "The response accurately uses weather API tools and provides a complete, well-structured forecast with all requested details."
+  },
+  "trace": {
+    "steps": [
+      {
+        "step_number": 1,
+        "start_time": "2025-10-05T10:00:00Z",
+        "end_time": "2025-10-05T10:00:00.5Z",
+        "duration": 500000000,
+        "stop_reason": "tool_use",
+        "input_tokens": 412,
+        "output_tokens": 89,
+        "tool_calls": [
+          {
+            "tool_id": "tool_1",
+            "tool_name": "get_location_coords",
+            "start_time": "2025-10-05T10:00:00.2Z",
+            "end_time": "2025-10-05T10:00:00.5Z",
+            "duration": 300000000,
+            "success": true
+          }
+        ]
+      },
+      {
+        "step_number": 2,
+        "start_time": "2025-10-05T10:00:00.5Z",
+        "end_time": "2025-10-05T10:00:01.2Z",
+        "duration": 700000000,
+        "stop_reason": "tool_use",
+        "input_tokens": 389,
+        "output_tokens": 127,
+        "tool_calls": [
+          {
+            "tool_id": "tool_2",
+            "tool_name": "get_forecast",
+            "start_time": "2025-10-05T10:00:00.8Z",
+            "end_time": "2025-10-05T10:00:01.2Z",
+            "duration": 400000000,
+            "success": true
+          }
+        ]
+      },
+      {
+        "step_number": 3,
+        "start_time": "2025-10-05T10:00:01.2Z",
+        "end_time": "2025-10-05T10:00:02Z",
+        "duration": 800000000,
+        "stop_reason": "end_turn",
+        "input_tokens": 433,
+        "output_tokens": 336,
+        "tool_calls": []
+      }
+    ],
+    "total_duration": 2000000000,
+    "total_input_tokens": 1234,
+    "total_output_tokens": 552,
+    "step_count": 3,
+    "tool_call_count": 2
+  }
+}
