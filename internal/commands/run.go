@@ -10,6 +10,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	evaluations "github.com/wolfeidau/go-mcp-evals"
+	"github.com/wolfeidau/go-mcp-evals/internal/reporting"
 )
 
 // RunCmd handles the run command
@@ -17,6 +18,7 @@ type RunCmd struct {
 	Config  string `help:"Path to evaluation configuration file (YAML or JSON)" required:"" type:"path"`
 	APIKey  string `help:"Anthropic API key (overrides ANTHROPIC_API_KEY env var)"`
 	BaseURL string `help:"Base URL for Anthropic API (overrides ANTHROPIC_BASE_URL env var)"`
+	Verbose bool   `help:"Show detailed per-eval breakdown" short:"v"`
 }
 
 // Run executes the run command
@@ -71,9 +73,13 @@ func (r *RunCmd) Run(globals *Globals) error {
 		}
 	}
 
-	// Print summary and determine exit code
-	exitCode := printSummary(results)
-	if exitCode != 0 {
+	// Print summary using new reporting system
+	if err := reporting.PrintStyledReport(results, r.Verbose); err != nil {
+		return fmt.Errorf("failed to print report: %w", err)
+	}
+
+	// Check for failures
+	if hasFailures(results) {
 		return fmt.Errorf("evaluations failed")
 	}
 
@@ -129,13 +135,24 @@ func writeTraces(results []evaluations.EvalRunResult, traceDir string) error {
 		}
 
 		filename := filepath.Join(traceDir, fmt.Sprintf("%s.json", result.Eval.Name))
-		data, err := json.MarshalIndent(result.Trace, "", "  ")
+
+		// Save full result (eval + grade + trace) for better report generation
+		traceData := struct {
+			Eval  evaluations.Eval         `json:"eval"`
+			Grade *evaluations.GradeResult `json:"grade,omitempty"`
+			Trace *evaluations.EvalTrace   `json:"trace"`
+		}{
+			Eval:  result.Eval,
+			Grade: result.Grade,
+			Trace: result.Trace,
+		}
+
+		data, err := json.MarshalIndent(traceData, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal trace for %s: %w", result.Eval.Name, err)
 		}
 
-		// #nosec G306 - Trace files are meant to be readable by others for debugging
-		if err := os.WriteFile(filename, data, 0644); err != nil {
+		if err := os.WriteFile(filename, data, 0600); err != nil {
 			return fmt.Errorf("failed to write trace for %s: %w", result.Eval.Name, err)
 		}
 	}
@@ -143,88 +160,23 @@ func writeTraces(results []evaluations.EvalRunResult, traceDir string) error {
 	return nil
 }
 
-func printSummary(results []evaluations.EvalRunResult) int {
-	fmt.Println("=" + repeatString("=", 79))
-	fmt.Println("EVALUATION SUMMARY")
-	fmt.Println("=" + repeatString("=", 79))
-	fmt.Println()
-
-	// Print header
-	fmt.Printf("%-20s %-10s %-8s %-8s %-8s %-8s %-8s\n",
-		"Name", "Status", "Acc", "Comp", "Rel", "Clar", "Reas")
-	fmt.Println(repeatString("-", 80))
-
-	hasFailures := false
-	for _, result := range results {
-		name := result.Eval.Name
-		if len(name) > 20 {
-			name = name[:17] + "..."
-		}
-
-		if result.Error != nil {
-			fmt.Printf("%-20s %-10s %s\n", name, "ERROR", result.Error.Error())
-			hasFailures = true
-			continue
-		}
-
-		if result.Grade == nil {
-			fmt.Printf("%-20s %-10s %s\n", name, "NO GRADE", "-")
-			continue
-		}
-
-		grade := result.Grade
-		status := "PASS"
-		avg := avgScore(grade)
-		if avg < 3.0 {
-			status = "FAIL"
-			hasFailures = true
-		}
-
-		fmt.Printf("%-20s %-10s %-8d %-8d %-8d %-8d %-8d\n",
-			name, status,
-			grade.Accuracy, grade.Completeness, grade.Relevance,
-			grade.Clarity, grade.Reasoning)
-	}
-
-	fmt.Println()
-
-	// Calculate overall statistics
-	totalEvals := len(results)
-	errorCount := 0
-	passCount := 0
-	failCount := 0
-
+func hasFailures(results []evaluations.EvalRunResult) bool {
 	for _, result := range results {
 		if result.Error != nil {
-			errorCount++
-		} else if result.Grade != nil {
-			if avgScore(result.Grade) >= 3.0 {
-				passCount++
-			} else {
-				failCount++
+			return true
+		}
+		if result.Grade != nil {
+			sum := result.Grade.Accuracy + result.Grade.Completeness + result.Grade.Relevance + result.Grade.Clarity + result.Grade.Reasoning
+			avg := float64(sum) / 5.0
+			if avg < 3.0 {
+				return true
 			}
 		}
 	}
-
-	fmt.Printf("Total: %d | Pass: %d | Fail: %d | Error: %d\n",
-		totalEvals, passCount, failCount, errorCount)
-	fmt.Println()
-
-	if hasFailures {
-		return 1
-	}
-	return 0
+	return false
 }
 
 func avgScore(grade *evaluations.GradeResult) float64 {
 	sum := grade.Accuracy + grade.Completeness + grade.Relevance + grade.Clarity + grade.Reasoning
 	return float64(sum) / 5.0
-}
-
-func repeatString(s string, count int) string {
-	result := ""
-	for i := 0; i < count; i++ {
-		result += s
-	}
-	return result
 }

@@ -14,9 +14,10 @@ var (
 type CLI struct {
 	commands.Globals
 
-	Version kong.VersionFlag `short:"v" help:"Show version information"`
+	Version kong.VersionFlag `help:"Show version information"`
 
 	Run      commands.RunCmd      `cmd:"" help:"Run evaluations against an MCP server (default)" default:"1"`
+	Report   commands.ReportCmd   `cmd:"" help:"Generate report from trace files"`
 	Validate commands.ValidateCmd `cmd:"" help:"Validate configuration file against JSON schema"`
 	Schema   commands.SchemaCmd   `cmd:"" help:"Generate JSON schema for evaluation configuration"`
 }
