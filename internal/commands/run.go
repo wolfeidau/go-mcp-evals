@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/rs/zerolog/log"
 	evaluations "github.com/wolfeidau/go-mcp-evals"
+	"github.com/wolfeidau/go-mcp-evals/internal/help"
 	"github.com/wolfeidau/go-mcp-evals/internal/reporting"
 )
 
@@ -89,13 +91,21 @@ func (r *RunCmd) Run(globals *Globals) error {
 }
 
 func runEvals(ctx context.Context, client *evaluations.EvalClient, evals []evaluations.Eval, quiet bool) ([]evaluations.EvalRunResult, error) {
+	styles := help.DefaultStyles()
 	results := make([]evaluations.EvalRunResult, len(evals))
+
+	// Style for indented content (description, status)
+	indentStyle := lipgloss.NewStyle().Padding(0, 0, 0, 8)
 
 	for i, eval := range evals {
 		if !quiet {
-			fmt.Printf("[%d/%d] Running eval: %s\n", i+1, len(evals), eval.Name)
+			// Print eval header with index
+			header := fmt.Sprintf("[%d/%d] Running eval: %s", i+1, len(evals), eval.Name)
+			fmt.Println(styles.Heading.Render(header))
+
 			if eval.Description != "" {
-				fmt.Printf("        %s\n", eval.Description)
+				desc := indentStyle.Render(styles.Muted.Render(eval.Description))
+				fmt.Println(desc)
 			}
 		}
 
@@ -106,7 +116,9 @@ func runEvals(ctx context.Context, client *evaluations.EvalClient, evals []evalu
 				Error: err,
 			}
 			if !quiet {
-				fmt.Printf("        ❌ Error: %v\n\n", err)
+				errMsg := fmt.Sprintf("❌ Error: %v", err)
+				fmt.Println(indentStyle.Render(styles.Error.Render(errMsg)))
+				fmt.Println()
 			}
 			continue
 		}
@@ -115,10 +127,12 @@ func runEvals(ctx context.Context, client *evaluations.EvalClient, evals []evalu
 
 		if !quiet {
 			if result.Grade != nil {
-				fmt.Printf("        ✓ Completed (avg score: %.1f/5)\n\n", avgScore(result.Grade))
+				msg := fmt.Sprintf("✓ Completed (avg score: %.1f/5)", avgScore(result.Grade))
+				fmt.Println(indentStyle.Render(styles.Success.Render(msg)))
 			} else {
-				fmt.Printf("        ✓ Completed\n\n")
+				fmt.Println(indentStyle.Render(styles.Success.Render("✓ Completed")))
 			}
+			fmt.Println()
 		}
 	}
 
