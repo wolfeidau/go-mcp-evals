@@ -352,6 +352,17 @@ func captureEvalDetail(result evaluations.EvalRunResult, styles help.Styles) str
 	if result.Trace != nil && len(result.Trace.Steps) > 0 {
 		output.WriteString(h4(styles, "Execution Trace"))
 
+		// Calculate and display execution summary
+		llmTime, toolTime := calculateExecutionTimes(result.Trace.Steps)
+		totalTime := llmTime + toolTime
+
+		tokensStr := formatTokensWithCache(
+			result.Trace.TotalInputTokens,
+			result.Trace.TotalOutputTokens,
+			result.Trace.TotalCacheCreationTokens,
+			result.Trace.TotalCacheReadTokens,
+		)
+
 		for _, step := range result.Trace.Steps {
 			tokensStr := formatTokensWithCache(
 				step.InputTokens,
@@ -388,43 +399,23 @@ func captureEvalDetail(result evaluations.EvalRunResult, styles help.Styles) str
 			}
 		}
 		output.WriteString("\n")
+
+		summaryStyle := lipgloss.NewStyle().
+			Foreground(styles.Argument.GetForeground()).
+			Padding(0, 0, 1, 0)
+
+		summaryInfo := fmt.Sprintf("Total: %s (LLM: %s, Tools: %s) | Tokens: %s",
+			formatDuration(totalTime),
+			formatDuration(llmTime),
+			formatDuration(toolTime),
+			tokensStr)
+
+		output.WriteString(summaryStyle.Render(summaryInfo) + "\n")
 	}
 
 	// Grading details
 	if result.Grade != nil {
 		output.WriteString(h4(styles, "Grading Details"))
-
-		// Display grading performance metrics if available
-		if result.Trace != nil && result.Trace.Grading != nil {
-			grading := result.Trace.Grading
-
-			// Format duration
-			durationStr := formatDuration(grading.Duration)
-
-			// Format tokens with cache info
-			tokensStr := formatTokensWithCache(
-				grading.InputTokens,
-				grading.OutputTokens,
-				grading.CacheCreationInputTokens,
-				grading.CacheReadInputTokens,
-			)
-
-			// Calculate cache hit percentage if applicable
-			cacheInfo := ""
-			if grading.CacheReadInputTokens > 0 {
-				cachePercent := float64(grading.CacheReadInputTokens) / float64(grading.InputTokens) * 100
-				cacheInfo = fmt.Sprintf(", %.0f%% cached", cachePercent)
-			}
-
-			perfStyle := lipgloss.NewStyle().
-				Foreground(styles.Muted.GetForeground()).
-				Padding(0, 0, 1, 0)
-
-			perfInfo := fmt.Sprintf("Duration: %s | Tokens: %s%s",
-				durationStr, tokensStr, cacheInfo)
-
-			output.WriteString(perfStyle.Render(perfInfo) + "\n")
-		}
 
 		grades := []struct {
 			name  string
@@ -458,6 +449,39 @@ func captureEvalDetail(result evaluations.EvalRunResult, styles help.Styles) str
 			output.WriteString(paragraph(result.Grade.OverallComment) + "\n")
 		}
 		output.WriteString("\n")
+
+		// Display grading performance metrics if available
+		if result.Trace != nil && result.Trace.Grading != nil {
+			grading := result.Trace.Grading
+
+			// Format duration
+			durationStr := formatDuration(grading.Duration)
+
+			// Format tokens with cache info
+			tokensStr := formatTokensWithCache(
+				grading.InputTokens,
+				grading.OutputTokens,
+				grading.CacheCreationInputTokens,
+				grading.CacheReadInputTokens,
+			)
+
+			// Calculate cache hit percentage if applicable
+			cacheInfo := ""
+			if grading.CacheReadInputTokens > 0 {
+				cachePercent := float64(grading.CacheReadInputTokens) / float64(grading.InputTokens) * 100
+				cacheInfo = fmt.Sprintf(", %.0f%% cached", cachePercent)
+			}
+
+			perfStyle := lipgloss.NewStyle().
+				Foreground(styles.Argument.GetForeground()).
+				Padding(0, 0, 1, 0)
+
+			perfInfo := fmt.Sprintf("Duration: %s | Tokens: %s%s",
+				durationStr, tokensStr, cacheInfo)
+
+			output.WriteString(perfStyle.Render(perfInfo) + "\n")
+		}
+
 	}
 
 	return output.String()
@@ -541,6 +565,25 @@ func formatTokens(count int) string {
 
 func formatTokenCounts(input, output int) string {
 	return fmt.Sprintf("%s → %s", formatTokens(input), formatTokens(output))
+}
+
+// calculateExecutionTimes computes LLM time vs Tool execution time from trace steps
+func calculateExecutionTimes(steps []evaluations.AgenticStep) (llmTime, toolTime time.Duration) {
+	for _, step := range steps {
+		// Sum up all tool execution time for this step
+		var stepToolTime time.Duration
+		for _, tool := range step.ToolCalls {
+			stepToolTime += tool.Duration
+		}
+
+		// LLM time is the step duration minus tool execution time
+		// (Step duration includes both API processing and tool execution)
+		stepLLMTime := step.Duration - stepToolTime
+
+		llmTime += stepLLMTime
+		toolTime += stepToolTime
+	}
+	return llmTime, toolTime
 }
 
 // formatTokensWithCache formats token counts including cache information
