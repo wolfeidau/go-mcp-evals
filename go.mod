@@ -8,7 +8,7 @@ require (
 	github.com/charmbracelet/colorprofile v0.3.0
 	github.com/charmbracelet/lipgloss/v2 v2.0.0-beta1
 	github.com/google/jsonschema-go v0.3.0
-	github.com/modelcontextprotocol/go-sdk v0.8.0
+	github.com/modelcontextprotocol/go-sdk v1.0.0
 	github.com/rs/zerolog v1.34.0
 	github.com/stretchr/testify v1.9.0
 	gopkg.in/yaml.v3 v3.0.1
