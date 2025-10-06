@@ -1,4 +1,4 @@
-FROM golang:1.25.1@sha256:ab1f5c47de0f2693ed97c46a646bde2e4f380e40c173454d00352940a379af60
+FROM golang:1.25.1@sha256:d7098379b7da665ab25b99795465ec320b1ca9d4addb9f77409c4827dc904211
 
 COPY --from=goreleaser/goreleaser:v2.12.5@sha256:812dda67b334c99b80571720977e6eee7e977a57e6b8e29a8b0c680a750300d7 /usr/bin/goreleaser /usr/local/bin/goreleaser
 COPY --from=golangci/golangci-lint:v2.5.0@sha256:0c8e590120a98ada5d0d9423e65dd957067e70c87efd692e83d5a311ddfc3151 /usr/bin/golangci-lint /usr/local/bin/golangci-lint
