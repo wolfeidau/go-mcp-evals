@@ -39,15 +39,17 @@ Use this exact format:
 )
 
 type EvalClientConfig struct {
-	APIKey       string
-	BaseURL      string // Optional: if set, override the default Anthropic API endpoint
-	Command      string
-	Args         []string
-	Env          []string
-	Model        string
-	GradingModel string // Optional: if set, use this model for grading instead of Model
-	MaxSteps     int
-	MaxTokens    int
+	APIKey              string
+	BaseURL             string // Optional: if set, override the default Anthropic API endpoint
+	Command             string
+	Args                []string
+	Env                 []string
+	Model               string
+	GradingModel        string // Optional: if set, use this model for grading instead of Model
+	MaxSteps            int
+	MaxTokens           int
+	EnablePromptCaching *bool  // Optional: enable Anthropic prompt caching for tool definitions and system prompts. Default: true
+	CacheTTL            string // Optional: cache time-to-live, either "5m" (default) or "1h". Requires EnablePromptCaching=true
 }
 
 type EvalClient struct {
@@ -70,6 +72,14 @@ func NewEvalClient(config EvalClientConfig) *EvalClient {
 	}
 	if config.MaxTokens <= 0 {
 		config.MaxTokens = 4096
+	}
+	// Enable prompt caching by default for cost savings
+	if config.EnablePromptCaching == nil {
+		enabled := true
+		config.EnablePromptCaching = &enabled
+	}
+	if config.CacheTTL == "" {
+		config.CacheTTL = "5m" // Default to 5-minute cache (free)
 	}
 
 	return &EvalClient{
@@ -211,6 +221,17 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 		toolParams = append(toolParams, toolParam)
 	}
 
+	// Add cache control to the last tool definition if caching is enabled
+	// This creates a cache breakpoint after all tools, maximizing cache reuse
+	if ec.config.EnablePromptCaching != nil && *ec.config.EnablePromptCaching && len(toolParams) > 0 {
+		lastIdx := len(toolParams) - 1
+		toolParams[lastIdx].CacheControl = anthropic.NewCacheControlEphemeralParam()
+		// Set TTL if specified (5m or 1h)
+		if ec.config.CacheTTL == "1h" {
+			toolParams[lastIdx].CacheControl.TTL = "1h"
+		}
+	}
+
 	tools := make([]anthropic.ToolUnionParam, len(toolParams))
 	for i, toolParam := range toolParams {
 		tools[i] = anthropic.ToolUnionParam{OfTool: &toolParam}
@@ -234,11 +255,22 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 			ToolCalls:  make([]ToolCall, 0),
 		}
 
+		// Build system prompt with optional cache control
+		systemPrompt := anthropic.TextBlockParam{
+			Text: SystemPrompt,
+		}
+		if ec.config.EnablePromptCaching != nil && *ec.config.EnablePromptCaching {
+			systemPrompt.CacheControl = anthropic.NewCacheControlEphemeralParam()
+			if ec.config.CacheTTL == "1h" {
+				systemPrompt.CacheControl.TTL = "1h"
+			}
+		}
+
 		stream := ec.client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
 			Model:     anthropic.Model(ec.config.Model),
 			MaxTokens: int64(ec.config.MaxTokens),
 			System: []anthropic.TextBlockParam{
-				{Text: SystemPrompt},
+				systemPrompt,
 			},
 			Messages: messages,
 			Tools:    tools,
@@ -270,6 +302,10 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 		step.StopReason = string(message.StopReason)
 		step.InputTokens = int(message.Usage.InputTokens)
 		step.OutputTokens = int(message.Usage.OutputTokens)
+
+		// Capture cache metrics from API response
+		step.CacheCreationInputTokens = int(message.Usage.CacheCreationInputTokens)
+		step.CacheReadInputTokens = int(message.Usage.CacheReadInputTokens)
 
 		// Extract text content
 		for _, block := range message.Content {
@@ -341,6 +377,10 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 		trace.TotalInputTokens += step.InputTokens
 		trace.TotalOutputTokens += step.OutputTokens
 		trace.ToolCallCount += len(step.ToolCalls)
+
+		// Aggregate cache metrics
+		trace.TotalCacheCreationTokens += step.CacheCreationInputTokens
+		trace.TotalCacheReadTokens += step.CacheReadInputTokens
 	}
 
 	evalResult := &EvalResult{
@@ -358,6 +398,12 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 	} else {
 		result.Grade = grade
 		trace.Grading = gradingTrace
+	}
+
+	// Include grading cache metrics in totals
+	if trace.Grading != nil {
+		trace.TotalCacheCreationTokens += trace.Grading.CacheCreationInputTokens
+		trace.TotalCacheReadTokens += trace.Grading.CacheReadInputTokens
 	}
 
 	// Finalize trace timing
@@ -431,12 +477,23 @@ Here is the LLM's answer: %s%s`, evalResult.Prompt, evalResult.RawResponse, tool
 		gradingModel = ec.config.GradingModel
 	}
 
+	// Build grading system prompt with optional cache control
+	gradingSystemPrompt := anthropic.TextBlockParam{
+		Text: EvalSystemPrompt,
+	}
+	if ec.config.EnablePromptCaching != nil && *ec.config.EnablePromptCaching {
+		gradingSystemPrompt.CacheControl = anthropic.NewCacheControlEphemeralParam()
+		if ec.config.CacheTTL == "1h" {
+			gradingSystemPrompt.CacheControl.TTL = "1h"
+		}
+	}
+
 	// Execute grading
 	resp, err := ec.client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     anthropic.Model(gradingModel),
 		MaxTokens: 1000,
 		System: []anthropic.TextBlockParam{
-			{Text: EvalSystemPrompt},
+			gradingSystemPrompt,
 		},
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(gradingPrompt)),
@@ -456,6 +513,10 @@ Here is the LLM's answer: %s%s`, evalResult.Prompt, evalResult.RawResponse, tool
 	trace.RawGradingOutput = rawResponse
 	trace.InputTokens = int(resp.Usage.InputTokens)
 	trace.OutputTokens = int(resp.Usage.OutputTokens)
+
+	// Capture cache metrics from API response
+	trace.CacheCreationInputTokens = int(resp.Usage.CacheCreationInputTokens)
+	trace.CacheReadInputTokens = int(resp.Usage.CacheReadInputTokens)
 
 	// Parse grade result
 	cleanedResponse, err := extractJSONFromResponse(rawResponse)
@@ -506,27 +567,31 @@ type EvalRunResult struct {
 
 // EvalTrace captures complete execution history of an evaluation run
 type EvalTrace struct {
-	Steps             []AgenticStep `json:"steps"`               // Each step in the agentic loop
-	Grading           *GradingTrace `json:"grading,omitempty"`   // Grading interaction details
-	TotalDuration     time.Duration `json:"total_duration"`      // Total execution time
-	TotalInputTokens  int           `json:"total_input_tokens"`  // Sum of input tokens across all steps
-	TotalOutputTokens int           `json:"total_output_tokens"` // Sum of output tokens across all steps
-	StepCount         int           `json:"step_count"`          // Number of agentic steps executed
-	ToolCallCount     int           `json:"tool_call_count"`     // Total number of tool calls made
+	Steps                    []AgenticStep `json:"steps"`                       // Each step in the agentic loop
+	Grading                  *GradingTrace `json:"grading,omitempty"`           // Grading interaction details
+	TotalDuration            time.Duration `json:"total_duration"`              // Total execution time
+	TotalInputTokens         int           `json:"total_input_tokens"`          // Sum of input tokens across all steps
+	TotalOutputTokens        int           `json:"total_output_tokens"`         // Sum of output tokens across all steps
+	StepCount                int           `json:"step_count"`                  // Number of agentic steps executed
+	ToolCallCount            int           `json:"tool_call_count"`             // Total number of tool calls made
+	TotalCacheCreationTokens int           `json:"total_cache_creation_tokens"` // Sum of cache creation tokens across all steps
+	TotalCacheReadTokens     int           `json:"total_cache_read_tokens"`     // Sum of cache read tokens across all steps
 }
 
 // AgenticStep records a single iteration of the agentic loop
 type AgenticStep struct {
-	StepNumber    int           `json:"step_number"`     // 1-indexed step number
-	StartTime     time.Time     `json:"start_time"`      // When this step started
-	EndTime       time.Time     `json:"end_time"`        // When this step completed
-	Duration      time.Duration `json:"duration"`        // Step execution duration
-	ModelResponse string        `json:"model_response"`  // Text content from assistant
-	StopReason    string        `json:"stop_reason"`     // end_turn, tool_use, max_tokens, etc.
-	ToolCalls     []ToolCall    `json:"tool_calls"`      // Tools executed in this step
-	InputTokens   int           `json:"input_tokens"`    // Input tokens for this step
-	OutputTokens  int           `json:"output_tokens"`   // Output tokens for this step
-	Error         string        `json:"error,omitempty"` // Error message if step failed
+	StepNumber               int           `json:"step_number"`                 // 1-indexed step number
+	StartTime                time.Time     `json:"start_time"`                  // When this step started
+	EndTime                  time.Time     `json:"end_time"`                    // When this step completed
+	Duration                 time.Duration `json:"duration"`                    // Step execution duration
+	ModelResponse            string        `json:"model_response"`              // Text content from assistant
+	StopReason               string        `json:"stop_reason"`                 // end_turn, tool_use, max_tokens, etc.
+	ToolCalls                []ToolCall    `json:"tool_calls"`                  // Tools executed in this step
+	InputTokens              int           `json:"input_tokens"`                // Input tokens for this step
+	OutputTokens             int           `json:"output_tokens"`               // Output tokens for this step
+	CacheCreationInputTokens int           `json:"cache_creation_input_tokens"` // Tokens used to create cache
+	CacheReadInputTokens     int           `json:"cache_read_input_tokens"`     // Tokens read from cache
+	Error                    string        `json:"error,omitempty"`             // Error message if step failed
 }
 
 // ToolCall captures details of a single tool invocation
@@ -544,15 +609,17 @@ type ToolCall struct {
 
 // GradingTrace records the grading interaction with the LLM
 type GradingTrace struct {
-	UserPrompt       string        `json:"user_prompt"`        // Original eval prompt
-	ModelResponse    string        `json:"model_response"`     // Model's answer being graded
-	ExpectedResult   string        `json:"expected_result"`    // Expected result description
-	GradingPrompt    string        `json:"grading_prompt"`     // Full prompt sent to grader
-	RawGradingOutput string        `json:"raw_grading_output"` // Complete LLM response before parsing
-	StartTime        time.Time     `json:"start_time"`         // When grading started
-	EndTime          time.Time     `json:"end_time"`           // When grading completed
-	Duration         time.Duration `json:"duration"`           // Grading duration
-	InputTokens      int           `json:"input_tokens"`       // Input tokens for grading
-	OutputTokens     int           `json:"output_tokens"`      // Output tokens for grading
-	Error            string        `json:"error,omitempty"`    // Error message if grading failed
+	UserPrompt               string        `json:"user_prompt"`                 // Original eval prompt
+	ModelResponse            string        `json:"model_response"`              // Model's answer being graded
+	ExpectedResult           string        `json:"expected_result"`             // Expected result description
+	GradingPrompt            string        `json:"grading_prompt"`              // Full prompt sent to grader
+	RawGradingOutput         string        `json:"raw_grading_output"`          // Complete LLM response before parsing
+	StartTime                time.Time     `json:"start_time"`                  // When grading started
+	EndTime                  time.Time     `json:"end_time"`                    // When grading completed
+	Duration                 time.Duration `json:"duration"`                    // Grading duration
+	InputTokens              int           `json:"input_tokens"`                // Input tokens for grading
+	OutputTokens             int           `json:"output_tokens"`               // Output tokens for grading
+	CacheCreationInputTokens int           `json:"cache_creation_input_tokens"` // Tokens used to create cache
+	CacheReadInputTokens     int           `json:"cache_read_input_tokens"`     // Tokens read from cache
+	Error                    string        `json:"error,omitempty"`             // Error message if grading failed
 }

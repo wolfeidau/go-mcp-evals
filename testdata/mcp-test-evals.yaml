@@ -4,6 +4,10 @@ timeout: 2m
 max_steps: 10
 max_tokens: 4096
 
+# Prompt caching configuration (reduces costs by 50-80% for repeated evaluations)
+# enable_prompt_caching: true   # Default: true. Set to false to disable caching.
+# cache_ttl: "5m"                # Default: "5m" (free). Options: "5m" or "1h" (premium).
+
 mcp_server:
   command: go
   args:

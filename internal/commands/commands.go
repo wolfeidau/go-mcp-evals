@@ -19,5 +19,13 @@ func createClient(config *evaluations.EvalConfig, apiKey, baseURL string) *evalu
 		MaxTokens:    int(config.MaxTokens),
 	}
 
+	// Map caching configuration from YAML to client config
+	if config.EnablePromptCaching != nil {
+		clientConfig.EnablePromptCaching = config.EnablePromptCaching
+	}
+	if config.CacheTTL != "" {
+		clientConfig.CacheTTL = config.CacheTTL
+	}
+
 	return evaluations.NewEvalClient(clientConfig)
 }
