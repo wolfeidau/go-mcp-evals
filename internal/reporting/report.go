@@ -32,12 +32,10 @@ func PrintStyledReport(results []evaluations.EvalRunResult, verbose bool) error 
 		content.WriteString(captureDetailedBreakdown(results, styles))
 	}
 
-	// Wrap the entire output with margins
+	// Wrap the entire output with top/bottom margins only
 	marginStyle := lipgloss.NewStyle().
 		MarginTop(1).
-		MarginRight(4).
-		MarginBottom(1).
-		MarginLeft(4)
+		MarginBottom(1)
 
 	fmt.Println(marginStyle.Render(content.String()))
 
