@@ -4,8 +4,6 @@ import evaluations "github.com/wolfeidau/go-mcp-evals"
 
 // Globals contains flags shared across all commands
 type Globals struct {
-	Quiet    bool   `help:"Suppress progress output, only show summary" short:"q"`
-	TraceDir string `help:"Directory to write trace files" type:"path"`
 }
 
 func createClient(config *evaluations.EvalConfig, apiKey, baseURL string) *evaluations.EvalClient {

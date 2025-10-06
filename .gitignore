@@ -28,3 +28,4 @@ bin/
 /traces/
 # Added by goreleaser init:
 dist/
+/mcp-evals
