@@ -156,6 +156,8 @@ func captureOverallStats(results []evaluations.EvalRunResult, styles help.Styles
 	totalOutputTokens := 0
 	totalToolCalls := 0
 	successfulToolCalls := 0
+	totalCacheCreationTokens := 0
+	totalCacheReadTokens := 0
 
 	for _, result := range results {
 		if result.Error != nil {
@@ -168,6 +170,8 @@ func captureOverallStats(results []evaluations.EvalRunResult, styles help.Styles
 			totalInputTokens += result.Trace.TotalInputTokens
 			totalOutputTokens += result.Trace.TotalOutputTokens
 			totalToolCalls += result.Trace.ToolCallCount
+			totalCacheCreationTokens += result.Trace.TotalCacheCreationTokens
+			totalCacheReadTokens += result.Trace.TotalCacheReadTokens
 
 			// Count successful tool calls
 			for _, step := range result.Trace.Steps {
@@ -259,6 +263,41 @@ func captureOverallStats(results []evaluations.EvalRunResult, styles help.Styles
 		output.WriteString("\n")
 	}
 
+	// Cache statistics (if prompt caching was used)
+	if totalCacheCreationTokens > 0 || totalCacheReadTokens > 0 {
+		output.WriteString(h3(styles, "Cache Performance"))
+
+		if totalCacheCreationTokens > 0 {
+			output.WriteString(fmt.Sprintf("Cache Writes:       %s tokens\n",
+				formatTokens(totalCacheCreationTokens)))
+		}
+
+		if totalCacheReadTokens > 0 {
+			output.WriteString(fmt.Sprintf("Cache Reads:        %s tokens\n",
+				formatTokens(totalCacheReadTokens)))
+
+			// Calculate cache hit rate
+			totalCacheableTokens := totalInputTokens
+			if totalCacheableTokens > 0 {
+				cacheHitRate := float64(totalCacheReadTokens) / float64(totalCacheableTokens) * 100
+				cacheHitRateStr := fmt.Sprintf("%.0f%%", cacheHitRate)
+				if cacheHitRate >= 50 {
+					cacheHitRateStr = styles.Success.Render(cacheHitRateStr)
+				}
+				output.WriteString(fmt.Sprintf("Cache Hit Rate:     %s\n", cacheHitRateStr))
+			}
+
+			// Estimate cost savings (cache reads are 90% cheaper)
+			// This is an approximation based on Anthropic's pricing
+			estimatedSavings := float64(totalCacheReadTokens) * 0.9
+			if estimatedSavings > 1000 {
+				output.WriteString(fmt.Sprintf("Est. Token Savings: ~%s tokens (90%% discount on reads)\n",
+					formatTokens(int(estimatedSavings))))
+			}
+		}
+		output.WriteString("\n")
+	}
+
 	return output.String()
 }
 
@@ -314,11 +353,16 @@ func captureEvalDetail(result evaluations.EvalRunResult, styles help.Styles) str
 		output.WriteString(h4(styles, "Execution Trace"))
 
 		for _, step := range result.Trace.Steps {
-			output.WriteString(fmt.Sprintf("Step %d: (%s, %s→%s tokens)\n",
+			tokensStr := formatTokensWithCache(
+				step.InputTokens,
+				step.OutputTokens,
+				step.CacheCreationInputTokens,
+				step.CacheReadInputTokens,
+			)
+			output.WriteString(fmt.Sprintf("Step %d: (%s, %s)\n",
 				step.StepNumber,
 				formatDuration(step.Duration),
-				formatTokens(step.InputTokens),
-				formatTokens(step.OutputTokens)))
+				tokensStr))
 
 			// Show tool calls
 			for _, tool := range step.ToolCalls {
@@ -349,6 +393,38 @@ func captureEvalDetail(result evaluations.EvalRunResult, styles help.Styles) str
 	// Grading details
 	if result.Grade != nil {
 		output.WriteString(h4(styles, "Grading Details"))
+
+		// Display grading performance metrics if available
+		if result.Trace != nil && result.Trace.Grading != nil {
+			grading := result.Trace.Grading
+
+			// Format duration
+			durationStr := formatDuration(grading.Duration)
+
+			// Format tokens with cache info
+			tokensStr := formatTokensWithCache(
+				grading.InputTokens,
+				grading.OutputTokens,
+				grading.CacheCreationInputTokens,
+				grading.CacheReadInputTokens,
+			)
+
+			// Calculate cache hit percentage if applicable
+			cacheInfo := ""
+			if grading.CacheReadInputTokens > 0 {
+				cachePercent := float64(grading.CacheReadInputTokens) / float64(grading.InputTokens) * 100
+				cacheInfo = fmt.Sprintf(", %.0f%% cached", cachePercent)
+			}
+
+			perfStyle := lipgloss.NewStyle().
+				Foreground(styles.Muted.GetForeground()).
+				Padding(0, 0, 1, 0)
+
+			perfInfo := fmt.Sprintf("Duration: %s | Tokens: %s%s",
+				durationStr, tokensStr, cacheInfo)
+
+			output.WriteString(perfStyle.Render(perfInfo) + "\n")
+		}
 
 		grades := []struct {
 			name  string
@@ -465,6 +541,31 @@ func formatTokens(count int) string {
 
 func formatTokenCounts(input, output int) string {
 	return fmt.Sprintf("%s → %s", formatTokens(input), formatTokens(output))
+}
+
+// formatTokensWithCache formats token counts including cache information
+func formatTokensWithCache(input, output, cacheCreated, cacheRead int) string {
+	baseFormat := formatTokenCounts(input, output)
+
+	// If no cache activity, return simple format
+	if cacheCreated == 0 && cacheRead == 0 {
+		return baseFormat
+	}
+
+	// Build cache details
+	cacheDetails := []string{}
+	if cacheRead > 0 {
+		cacheDetails = append(cacheDetails, fmt.Sprintf("%s read", formatTokens(cacheRead)))
+	}
+	if cacheCreated > 0 {
+		cacheDetails = append(cacheDetails, fmt.Sprintf("%s created", formatTokens(cacheCreated)))
+	}
+
+	if len(cacheDetails) > 0 {
+		return fmt.Sprintf("%s (cache: %s)", baseFormat, strings.Join(cacheDetails, ", "))
+	}
+
+	return baseFormat
 }
 
 func avgScore(grade *evaluations.GradeResult) float64 {
