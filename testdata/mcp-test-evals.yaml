@@ -26,6 +26,11 @@ evals:
     description: Test echo tool
     prompt: "Echo the message 'hello world'"
     expected_result: "Should return 'hello world'"
+    grading_rubric:
+      completeness:
+        must_have:
+          - "Shows the actual echoed text 'hello world' in the response"
+          - "Not just confirmation that the tool ran, but the actual output"
 
   - name: get_user_info
     description: Test realistic JSON API response handling

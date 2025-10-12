@@ -67,6 +67,86 @@ Evaluation configs support both YAML and JSON formats:
 - `mcp_server` - Server command, args, and environment
 - `evals` - List of test cases with name, prompt, and expected result
 
+## Custom Grading Rubrics
+
+Custom grading rubrics allow you to define specific, measurable criteria for each evaluation dimension. This makes grading more consistent and meaningful by providing concrete guidance to the grading LLM.
+
+### Why Use Rubrics?
+
+Without rubrics, the grading LLM uses generic 1-5 scoring criteria. This can lead to:
+- **Inconsistent scoring**: Same response quality gets different grades
+- **Lack of specificity**: Generic criteria don't capture domain-specific requirements
+- **Difficult iteration**: Can't specify what matters most for your use case
+
+Rubrics solve this by defining exactly what "accurate" or "complete" means for each evaluation.
+
+### Basic Example
+
+```yaml
+evals:
+  - name: troubleshoot_build
+    prompt: "Troubleshoot the failed build at https://example.com/builds/123"
+    expected_result: "Should identify root cause and provide remediation"
+
+    grading_rubric:
+      # Optional: Focus on specific dimensions (defaults to all 5)
+      dimensions: ["accuracy", "completeness", "reasoning"]
+
+      accuracy:
+        description: "Correctness of root cause identification"
+        must_have:
+          - "Identifies actual failing job(s) by name or ID"
+          - "Extracts real error messages from logs"
+        penalties:
+          - "Misidentifies root cause"
+          - "Fabricates error messages not in logs"
+
+      completeness:
+        description: "Thoroughness of investigation"
+        must_have:
+          - "Examines job logs"
+          - "Provides specific remediation steps"
+        nice_to_have:
+          - "Suggests preventive measures"
+
+      # Optional: Minimum acceptable scores for pass/fail
+      minimum_scores:
+        accuracy: 4
+        completeness: 3
+```
+
+### Rubric Structure
+
+Each dimension can specify:
+
+- **`description`**: What this dimension means for this specific eval
+- **`must_have`**: Required elements for high scores (4-5)
+- **`nice_to_have`**: Optional elements that improve scores
+- **`penalties`**: Elements that reduce scores (errors, omissions)
+
+Available dimensions: `accuracy`, `completeness`, `relevance`, `clarity`, `reasoning`
+
+### LLM-Assisted Rubric Creation
+
+Manually writing rubrics is time-consuming. Use an LLM to draft initial rubrics:
+
+```bash
+# Generate rubric from eval description
+claude "Create a grading rubric for this eval: [paste your eval config]"
+
+# Refine rubric from actual results
+mcp-evals run --config evals.yaml --trace-dir traces
+claude "Refine this rubric based on these results: $(cat traces/my_eval.json | jq '.grade')"
+```
+
+**Best practices:**
+1. Start generic, refine iteratively
+2. Use actual tool outputs and responses in prompts
+3. Focus on measurable criteria (not vague requirements)
+4. Run eval 3-5 times to validate consistency
+
+See [specs/grading_rubric.md](specs/grading_rubric.md) for detailed guidance on creating rubrics.
+
 ## How It Works
 
 1. Connects to the specified MCP server via command/transport
