@@ -28,6 +28,7 @@ func TestEvalClient_loadMCPSession(t *testing.T) {
 				"get_current_time",
 				"get_env",
 				"get_user",
+				"get_system_logs",
 			},
 			expectError: false,
 		},
@@ -405,4 +406,197 @@ func TestBuildGradingPromptWithToolContext(t *testing.T) {
 	assert.Contains(prompt, "test_tool")
 	assert.Contains(prompt, "SUCCESS")
 	assert.Contains(prompt, "test output")
+}
+
+func TestGradingRubricValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		rubric    *GradingRubric
+		wantError bool
+		errorMsg  string
+	}{
+		{
+			name:      "nil rubric is valid",
+			rubric:    nil,
+			wantError: false,
+		},
+		{
+			name: "empty rubric is valid",
+			rubric: &GradingRubric{
+				Dimensions:    []string{},
+				MinimumScores: map[string]int{},
+			},
+			wantError: false,
+		},
+		{
+			name: "valid dimensions",
+			rubric: &GradingRubric{
+				Dimensions: []string{"accuracy", "completeness", "relevance", "clarity", "reasoning"},
+			},
+			wantError: false,
+		},
+		{
+			name: "invalid dimension in list",
+			rubric: &GradingRubric{
+				Dimensions: []string{"accuracy", "invalid_dimension"},
+			},
+			wantError: true,
+			errorMsg:  "invalid dimension 'invalid_dimension'",
+		},
+		{
+			name: "valid minimum scores",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy":     5,
+					"completeness": 4,
+					"relevance":    3,
+					"clarity":      2,
+					"reasoning":    1,
+				},
+			},
+			wantError: false,
+		},
+		{
+			name: "invalid dimension in minimum scores",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy":          5,
+					"invalid_dimension": 4,
+				},
+			},
+			wantError: true,
+			errorMsg:  "invalid dimension in minimum_scores 'invalid_dimension'",
+		},
+		{
+			name: "minimum score too low",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy": 0,
+				},
+			},
+			wantError: true,
+			errorMsg:  "minimum score for 'accuracy' must be between 1 and 5, got 0",
+		},
+		{
+			name: "minimum score too high",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy": 6,
+				},
+			},
+			wantError: true,
+			errorMsg:  "minimum score for 'accuracy' must be between 1 and 5, got 6",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert := require.New(t)
+
+			err := tt.rubric.Validate()
+
+			if tt.wantError {
+				assert.Error(err)
+				assert.Contains(err.Error(), tt.errorMsg)
+			} else {
+				assert.NoError(err)
+			}
+		})
+	}
+}
+
+func TestGradingRubricCheckMinimumScores(t *testing.T) {
+	tests := []struct {
+		name      string
+		rubric    *GradingRubric
+		grade     *GradeResult
+		wantError bool
+		errorMsg  string
+	}{
+		{
+			name:      "nil rubric passes",
+			rubric:    nil,
+			grade:     &GradeResult{Accuracy: 1, Completeness: 1},
+			wantError: false,
+		},
+		{
+			name:      "empty minimum scores passes",
+			rubric:    &GradingRubric{MinimumScores: map[string]int{}},
+			grade:     &GradeResult{Accuracy: 1, Completeness: 1},
+			wantError: false,
+		},
+		{
+			name: "all scores meet minimum",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy":     3,
+					"completeness": 3,
+					"relevance":    3,
+				},
+			},
+			grade: &GradeResult{
+				Accuracy:     5,
+				Completeness: 4,
+				Relevance:    3,
+			},
+			wantError: false,
+		},
+		{
+			name: "accuracy below minimum",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy": 4,
+				},
+			},
+			grade: &GradeResult{
+				Accuracy: 3,
+			},
+			wantError: true,
+			errorMsg:  "accuracy: got 3, required 4",
+		},
+		{
+			name: "multiple scores below minimum",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy":     4,
+					"completeness": 3,
+					"clarity":      5,
+				},
+			},
+			grade: &GradeResult{
+				Accuracy:     2,
+				Completeness: 3,
+				Clarity:      4,
+			},
+			wantError: true,
+			errorMsg:  "accuracy: got 2, required 4",
+		},
+		{
+			name: "edge case - exactly at minimum",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy": 3,
+				},
+			},
+			grade: &GradeResult{
+				Accuracy: 3,
+			},
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert := require.New(t)
+
+			err := tt.rubric.CheckMinimumScores(tt.grade)
+
+			if tt.wantError {
+				assert.Error(err)
+				assert.Contains(err.Error(), tt.errorMsg)
+			} else {
+				assert.NoError(err)
+			}
+		})
+	}
 }

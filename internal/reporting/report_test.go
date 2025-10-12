@@ -251,7 +251,7 @@ func TestCalculateToolSuccessRate(t *testing.T) {
 		}
 
 		rate := calculateToolSuccessRate(trace)
-		assert.Equal(100.0, rate)
+		assert.InDelta(100.0, rate, 0.01)
 	})
 
 	t.Run("50% success rate", func(t *testing.T) {
@@ -274,7 +274,7 @@ func TestCalculateToolSuccessRate(t *testing.T) {
 		}
 
 		rate := calculateToolSuccessRate(trace)
-		assert.Equal(50.0, rate)
+		assert.InDelta(50.0, rate, 0.01)
 	})
 
 	t.Run("no tool calls", func(t *testing.T) {
@@ -284,7 +284,7 @@ func TestCalculateToolSuccessRate(t *testing.T) {
 		}
 
 		rate := calculateToolSuccessRate(trace)
-		assert.Equal(0.0, rate)
+		assert.InDelta(0.0, rate, 0.01)
 	})
 }
 
@@ -317,7 +317,7 @@ func TestFormatHelpers(t *testing.T) {
 			Clarity:      4,
 			Reasoning:    5,
 		}
-		assert.Equal(4.6, avgScore(grade))
+		assert.InDelta(4.6, avgScore(grade), 0.01)
 	})
 }
 

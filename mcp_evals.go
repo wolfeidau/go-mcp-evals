@@ -12,6 +12,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -80,13 +81,13 @@ func NewEvalClient(config EvalClientConfig) *EvalClient {
 		config.CacheTTL = "5m" // Default to 5-minute cache (free)
 	}
 
-	enabled := true
-
 	if config.EnablePromptCaching == nil {
+		enabled := true
 		config.EnablePromptCaching = &enabled // Enable prompt caching by default for cost savings
 	}
 
 	if config.EnforceMinimumScores == nil {
+		enabled := true
 		config.EnforceMinimumScores = &enabled // Enable minimum score enforcement by default
 	}
 
@@ -410,6 +411,10 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 		// Check minimum scores if enforcement is enabled
 		if ec.config.EnforceMinimumScores != nil && *ec.config.EnforceMinimumScores {
 			if scoreErr := eval.GradingRubric.CheckMinimumScores(grade); scoreErr != nil {
+				log.Warn().
+					Str("eval", eval.Name).
+					Err(scoreErr).
+					Msg("Eval failed minimum score requirements")
 				result.Error = scoreErr
 			}
 		}
@@ -730,7 +735,7 @@ func (r *GradingRubric) CheckMinimumScores(grade *GradeResult) error {
 	}
 
 	if len(failures) > 0 {
-		return fmt.Errorf("eval failed minimum score requirements: %s", strings.Join(failures, "; "))
+		return fmt.Errorf("eval failed minimum score requirements: %s. Review grading criteria or adjust rubric thresholds", strings.Join(failures, "; "))
 	}
 
 	return nil
