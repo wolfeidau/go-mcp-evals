@@ -26,12 +26,27 @@ func TestLoadConfig_YAML(t *testing.T) {
 	assert.Len(config.MCPServer.Env, 1)
 
 	// Verify evals
-	assert.Len(config.Evals, 3)
+	assert.Len(config.Evals, 4)
 
 	firstEval := config.Evals[0]
 	assert.Equal("add", firstEval.Name)
 	assert.Equal("What is 5 plus 3?", firstEval.Prompt)
 	assert.Equal("Should return 8", firstEval.ExpectedResult)
+
+	// Verify the troubleshooting eval with grading rubric
+	troubleshootEval := config.Evals[3]
+	assert.Equal("troubleshoot_service_outage", troubleshootEval.Name)
+	assert.NotNil(troubleshootEval.GradingRubric)
+	assert.Len(troubleshootEval.GradingRubric.Dimensions, 3)
+	assert.Contains(troubleshootEval.GradingRubric.Dimensions, "accuracy")
+	assert.Contains(troubleshootEval.GradingRubric.Dimensions, "completeness")
+	assert.Contains(troubleshootEval.GradingRubric.Dimensions, "reasoning")
+	assert.NotNil(troubleshootEval.GradingRubric.Accuracy)
+	assert.NotNil(troubleshootEval.GradingRubric.Completeness)
+	assert.NotNil(troubleshootEval.GradingRubric.Reasoning)
+	assert.Equal(4, troubleshootEval.GradingRubric.MinimumScores["accuracy"])
+	assert.Equal(4, troubleshootEval.GradingRubric.MinimumScores["completeness"])
+	assert.Equal(3, troubleshootEval.GradingRubric.MinimumScores["reasoning"])
 }
 
 func TestLoadConfig_InvalidFile(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestEvalClient_loadMCPSession(t *testing.T) {
@@ -27,6 +28,7 @@ func TestEvalClient_loadMCPSession(t *testing.T) {
 				"get_current_time",
 				"get_env",
 				"get_user",
+				"get_system_logs",
 			},
 			expectError: false,
 		},
@@ -181,4 +183,420 @@ func TestEvalClient_loadMCPSession_CustomEnv(t *testing.T) {
 	// PATH should be inherited from parent environment
 	assert.True(output2.Set)
 	assert.NotEmpty(output2.Value)
+}
+
+func TestGradingRubricParsing(t *testing.T) {
+	assert := require.New(t)
+
+	yamlData := `
+name: test_eval
+prompt: test prompt
+grading_rubric:
+  dimensions:
+    - accuracy
+    - completeness
+  accuracy:
+    description: "Test accuracy description"
+    must_have:
+      - "item 1"
+      - "item 2"
+    nice_to_have:
+      - "nice item 1"
+    penalties:
+      - "penalty 1"
+  completeness:
+    must_have:
+      - "complete item"
+  minimum_scores:
+    accuracy: 4
+    completeness: 3
+`
+
+	var eval Eval
+	err := yaml.Unmarshal([]byte(yamlData), &eval)
+	assert.NoError(err)
+	assert.NotNil(eval.GradingRubric)
+
+	// Test dimensions
+	assert.Len(eval.GradingRubric.Dimensions, 2)
+	assert.Equal("accuracy", eval.GradingRubric.Dimensions[0])
+	assert.Equal("completeness", eval.GradingRubric.Dimensions[1])
+
+	// Test accuracy criteria
+	assert.NotNil(eval.GradingRubric.Accuracy)
+	assert.Equal("Test accuracy description", eval.GradingRubric.Accuracy.Description)
+	assert.Len(eval.GradingRubric.Accuracy.MustHave, 2)
+	assert.Equal("item 1", eval.GradingRubric.Accuracy.MustHave[0])
+	assert.Equal("item 2", eval.GradingRubric.Accuracy.MustHave[1])
+	assert.Len(eval.GradingRubric.Accuracy.NiceToHave, 1)
+	assert.Equal("nice item 1", eval.GradingRubric.Accuracy.NiceToHave[0])
+	assert.Len(eval.GradingRubric.Accuracy.Penalties, 1)
+	assert.Equal("penalty 1", eval.GradingRubric.Accuracy.Penalties[0])
+
+	// Test completeness criteria
+	assert.NotNil(eval.GradingRubric.Completeness)
+	assert.Len(eval.GradingRubric.Completeness.MustHave, 1)
+
+	// Test minimum scores
+	assert.Equal(4, eval.GradingRubric.MinimumScores["accuracy"])
+	assert.Equal(3, eval.GradingRubric.MinimumScores["completeness"])
+}
+
+func TestGradingRubricParsingWithoutRubric(t *testing.T) {
+	assert := require.New(t)
+
+	yamlData := `
+name: test_eval
+prompt: test prompt
+expected_result: test expected result
+`
+
+	var eval Eval
+	err := yaml.Unmarshal([]byte(yamlData), &eval)
+	assert.NoError(err)
+	assert.Nil(eval.GradingRubric)
+	assert.Equal("test_eval", eval.Name)
+	assert.Equal("test prompt", eval.Prompt)
+	assert.Equal("test expected result", eval.ExpectedResult)
+}
+
+func TestGradingRubricJSONMarshal(t *testing.T) {
+	assert := require.New(t)
+
+	eval := Eval{
+		Name:   "test",
+		Prompt: "test prompt",
+		GradingRubric: &GradingRubric{
+			Dimensions: []string{"accuracy"},
+			Accuracy: &DimensionCriteria{
+				Description: "Test description",
+				MustHave:    []string{"item 1"},
+			},
+			MinimumScores: map[string]int{"accuracy": 5},
+		},
+	}
+
+	// Marshal to JSON
+	jsonData, err := json.Marshal(eval)
+	assert.NoError(err)
+
+	// Unmarshal back
+	var decoded Eval
+	err = json.Unmarshal(jsonData, &decoded)
+	assert.NoError(err)
+
+	// Verify fields
+	assert.Equal("test", decoded.Name)
+	assert.NotNil(decoded.GradingRubric)
+	assert.Len(decoded.GradingRubric.Dimensions, 1)
+	assert.Equal("accuracy", decoded.GradingRubric.Dimensions[0])
+	assert.NotNil(decoded.GradingRubric.Accuracy)
+	assert.Equal("Test description", decoded.GradingRubric.Accuracy.Description)
+	assert.Equal(5, decoded.GradingRubric.MinimumScores["accuracy"])
+}
+
+func TestFormatDimensionCriteria(t *testing.T) {
+	assert := require.New(t)
+
+	client := NewEvalClient(EvalClientConfig{Model: "test"})
+
+	criteria := &DimensionCriteria{
+		Description: "Test description",
+		MustHave:    []string{"must 1", "must 2"},
+		NiceToHave:  []string{"nice 1"},
+		Penalties:   []string{"penalty 1"},
+	}
+
+	result := client.formatDimensionCriteria("Accuracy", criteria)
+
+	assert.Contains(result, "### Accuracy")
+	assert.Contains(result, "Test description")
+	assert.Contains(result, "must 1")
+	assert.Contains(result, "must 2")
+	assert.Contains(result, "nice 1")
+	assert.Contains(result, "penalty 1")
+	assert.Contains(result, "Must have for high scores")
+	assert.Contains(result, "Nice to have")
+	assert.Contains(result, "Score reductions")
+}
+
+func TestBuildGradingPromptWithRubric(t *testing.T) {
+	assert := require.New(t)
+
+	client := NewEvalClient(EvalClientConfig{Model: "test"})
+
+	eval := Eval{
+		Prompt: "test prompt",
+		GradingRubric: &GradingRubric{
+			Accuracy: &DimensionCriteria{
+				MustHave: []string{"criterion 1", "criterion 2"},
+			},
+			MinimumScores: map[string]int{"accuracy": 4},
+		},
+	}
+
+	evalResult := &EvalResult{
+		Prompt:      "test prompt",
+		RawResponse: "test response",
+	}
+
+	prompt := client.buildGradingPrompt(eval, evalResult, nil)
+
+	assert.Contains(prompt, "Custom Grading Criteria")
+	assert.Contains(prompt, "criterion 1")
+	assert.Contains(prompt, "criterion 2")
+	assert.Contains(prompt, "Minimum Acceptable Scores")
+	assert.Contains(prompt, "accuracy: 4/5")
+}
+
+func TestBuildGradingPromptWithoutRubric(t *testing.T) {
+	assert := require.New(t)
+
+	client := NewEvalClient(EvalClientConfig{Model: "test"})
+
+	eval := Eval{
+		Prompt:        "test prompt",
+		GradingRubric: nil, // No rubric
+	}
+
+	evalResult := &EvalResult{
+		Prompt:      "test prompt",
+		RawResponse: "test response",
+	}
+
+	prompt := client.buildGradingPrompt(eval, evalResult, nil)
+
+	assert.Contains(prompt, "test prompt")
+	assert.Contains(prompt, "test response")
+	assert.NotContains(prompt, "Custom Grading Criteria")
+}
+
+func TestBuildGradingPromptWithToolContext(t *testing.T) {
+	assert := require.New(t)
+
+	client := NewEvalClient(EvalClientConfig{Model: "test"})
+
+	eval := Eval{
+		Prompt: "test prompt",
+	}
+
+	evalResult := &EvalResult{
+		Prompt:      "test prompt",
+		RawResponse: "test response",
+	}
+
+	execTrace := &EvalTrace{
+		ToolCallCount: 2,
+		Steps: []AgenticStep{
+			{
+				ToolCalls: []ToolCall{
+					{
+						ToolName: "test_tool",
+						Success:  true,
+						Output:   []byte(`{"result":"test output"}`),
+					},
+				},
+			},
+		},
+	}
+
+	prompt := client.buildGradingPrompt(eval, evalResult, execTrace)
+
+	assert.Contains(prompt, "Tool Execution Context")
+	assert.Contains(prompt, "test_tool")
+	assert.Contains(prompt, "SUCCESS")
+	assert.Contains(prompt, "test output")
+}
+
+func TestGradingRubricValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		rubric    *GradingRubric
+		wantError bool
+		errorMsg  string
+	}{
+		{
+			name:      "nil rubric is valid",
+			rubric:    nil,
+			wantError: false,
+		},
+		{
+			name: "empty rubric is valid",
+			rubric: &GradingRubric{
+				Dimensions:    []string{},
+				MinimumScores: map[string]int{},
+			},
+			wantError: false,
+		},
+		{
+			name: "valid dimensions",
+			rubric: &GradingRubric{
+				Dimensions: []string{"accuracy", "completeness", "relevance", "clarity", "reasoning"},
+			},
+			wantError: false,
+		},
+		{
+			name: "invalid dimension in list",
+			rubric: &GradingRubric{
+				Dimensions: []string{"accuracy", "invalid_dimension"},
+			},
+			wantError: true,
+			errorMsg:  "invalid dimension 'invalid_dimension'",
+		},
+		{
+			name: "valid minimum scores",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy":     5,
+					"completeness": 4,
+					"relevance":    3,
+					"clarity":      2,
+					"reasoning":    1,
+				},
+			},
+			wantError: false,
+		},
+		{
+			name: "invalid dimension in minimum scores",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy":          5,
+					"invalid_dimension": 4,
+				},
+			},
+			wantError: true,
+			errorMsg:  "invalid dimension in minimum_scores 'invalid_dimension'",
+		},
+		{
+			name: "minimum score too low",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy": 0,
+				},
+			},
+			wantError: true,
+			errorMsg:  "minimum score for 'accuracy' must be between 1 and 5, got 0",
+		},
+		{
+			name: "minimum score too high",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy": 6,
+				},
+			},
+			wantError: true,
+			errorMsg:  "minimum score for 'accuracy' must be between 1 and 5, got 6",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert := require.New(t)
+
+			err := tt.rubric.Validate()
+
+			if tt.wantError {
+				assert.Error(err)
+				assert.Contains(err.Error(), tt.errorMsg)
+			} else {
+				assert.NoError(err)
+			}
+		})
+	}
+}
+
+func TestGradingRubricCheckMinimumScores(t *testing.T) {
+	tests := []struct {
+		name      string
+		rubric    *GradingRubric
+		grade     *GradeResult
+		wantError bool
+		errorMsg  string
+	}{
+		{
+			name:      "nil rubric passes",
+			rubric:    nil,
+			grade:     &GradeResult{Accuracy: 1, Completeness: 1},
+			wantError: false,
+		},
+		{
+			name:      "empty minimum scores passes",
+			rubric:    &GradingRubric{MinimumScores: map[string]int{}},
+			grade:     &GradeResult{Accuracy: 1, Completeness: 1},
+			wantError: false,
+		},
+		{
+			name: "all scores meet minimum",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy":     3,
+					"completeness": 3,
+					"relevance":    3,
+				},
+			},
+			grade: &GradeResult{
+				Accuracy:     5,
+				Completeness: 4,
+				Relevance:    3,
+			},
+			wantError: false,
+		},
+		{
+			name: "accuracy below minimum",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy": 4,
+				},
+			},
+			grade: &GradeResult{
+				Accuracy: 3,
+			},
+			wantError: true,
+			errorMsg:  "accuracy: got 3, required 4",
+		},
+		{
+			name: "multiple scores below minimum",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy":     4,
+					"completeness": 3,
+					"clarity":      5,
+				},
+			},
+			grade: &GradeResult{
+				Accuracy:     2,
+				Completeness: 3,
+				Clarity:      4,
+			},
+			wantError: true,
+			errorMsg:  "accuracy: got 2, required 4",
+		},
+		{
+			name: "edge case - exactly at minimum",
+			rubric: &GradingRubric{
+				MinimumScores: map[string]int{
+					"accuracy": 3,
+				},
+			},
+			grade: &GradeResult{
+				Accuracy: 3,
+			},
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert := require.New(t)
+
+			err := tt.rubric.CheckMinimumScores(tt.grade)
+
+			if tt.wantError {
+				assert.Error(err)
+				assert.Contains(err.Error(), tt.errorMsg)
+			} else {
+				assert.NoError(err)
+			}
+		})
+	}
 }

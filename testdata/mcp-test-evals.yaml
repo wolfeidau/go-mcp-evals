@@ -26,8 +26,62 @@ evals:
     description: Test echo tool
     prompt: "Echo the message 'hello world'"
     expected_result: "Should return 'hello world'"
+    grading_rubric:
+      completeness:
+        must_have:
+          - "Shows the actual echoed text 'hello world' in the response"
+          - "Not just confirmation that the tool ran, but the actual output"
 
   - name: get_user_info
     description: Test realistic JSON API response handling
     prompt: "Get information about user with ID 'user-123'"
     expected_result: "Should return user details including name Alice Johnson, email, creation date, and teams (engineering, platform, devops)"
+
+  - name: troubleshoot_service_outage
+    description: Test troubleshooting capabilities with custom grading rubric
+    prompt: "The api-gateway service is failing to connect to the user-service. Investigate the root cause by checking logs from relevant services and provide a diagnosis with recommended fix."
+    expected_result: "Should identify the database connection pool exhaustion as the root cause, trace the issue through multiple services, and recommend increasing connection pool limits or optimizing queries"
+
+    # Custom grading rubric for troubleshooting evaluations
+    grading_rubric:
+      # Focus on the most important dimensions for troubleshooting
+      dimensions: ["accuracy", "completeness", "reasoning"]
+
+      accuracy:
+        description: "Correctness of root cause identification and technical details from logs"
+        must_have:
+          - "Identifies database connection pool exhaustion as the root cause"
+          - "Extracts actual error messages from logs (e.g., 'connection pool exhausted', 'too many connections')"
+          - "Correctly correlates errors across multiple services (api-gateway -> user-service -> database)"
+        penalties:
+          - "Misidentifies the root cause (e.g., blames network issues instead of database)"
+          - "Fabricates error messages not present in the logs"
+          - "Ignores critical error messages from the database service"
+
+      completeness:
+        description: "Thoroughness of investigation across all relevant services"
+        must_have:
+          - "Checks logs from api-gateway service"
+          - "Checks logs from user-service service"
+          - "Checks logs from database service"
+          - "Provides specific remediation steps (not just 'fix the database')"
+        nice_to_have:
+          - "Provides timeline of how the issue propagated across services"
+          - "Explains why the issue cascaded (e.g., connection pool exhaustion causes query timeouts)"
+          - "Suggests preventive measures (monitoring, connection pool sizing, query optimization)"
+
+      reasoning:
+        description: "Quality of logical deduction from log evidence to root cause"
+        must_have:
+          - "Explains the causal chain: database connections exhausted -> user-service queries timeout -> api-gateway connection failures"
+          - "Uses specific log timestamps to show sequence of events"
+          - "Connects error patterns across services (multiple connection failures, retry attempts)"
+        nice_to_have:
+          - "Distinguishes between symptoms (api-gateway timeouts) and root cause (database connection exhaustion)"
+          - "Explains why retry attempts in api-gateway didn't help"
+
+      # Require high scores to pass this evaluation
+      minimum_scores:
+        accuracy: 4
+        completeness: 4
+        reasoning: 3

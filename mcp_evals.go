@@ -12,6 +12,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -25,6 +26,8 @@ const (
 - Clarity: Is the explanation easy to understand and well-structured?
 - Reasoning: Does the answer show logical thinking or provide evidence or rationale?
 
+If custom grading criteria are provided below, use those specific requirements to inform your scoring. The custom criteria define what "complete", "accurate", etc. mean for this particular evaluation.
+
 CRITICAL: Return ONLY a valid JSON object with no markdown formatting, no code blocks, and no explanation. Your entire response must be valid JSON starting with { and ending with }.
 
 Use this exact format:
@@ -34,22 +37,44 @@ Use this exact format:
     "relevance": 1-5,
     "clarity": 1-5,
     "reasoning": 1-5,
-    "overall_comments": "A short paragraph summarizing the strengths and weaknesses of the answer."
+    "overall_comments": "A short paragraph summarizing the strengths and weaknesses of the answer, specifically noting which rubric criteria were met or missed if custom criteria were provided."
 }`
 )
 
 type EvalClientConfig struct {
-	APIKey              string
-	BaseURL             string // Optional: if set, override the default Anthropic API endpoint
-	Command             string
-	Args                []string
-	Env                 []string
-	Model               string
-	GradingModel        string // Optional: if set, use this model for grading instead of Model
-	MaxSteps            int
-	MaxTokens           int
-	EnablePromptCaching *bool  // Optional: enable Anthropic prompt caching for tool definitions and system prompts. Default: true
-	CacheTTL            string // Optional: cache time-to-live, either "5m" (default) or "1h". Requires EnablePromptCaching=true
+	APIKey               string
+	BaseURL              string // Optional: if set, override the default Anthropic API endpoint
+	Command              string
+	Args                 []string
+	Env                  []string
+	Model                string
+	GradingModel         string // Optional: if set, use this model for grading instead of Model
+	MaxSteps             int
+	MaxTokens            int
+	EnablePromptCaching  *bool  // Optional: enable Anthropic prompt caching for tool definitions and system prompts. Default: true
+	CacheTTL             string // Optional: cache time-to-live, either "5m" (default) or "1h". Requires EnablePromptCaching=true
+	EnforceMinimumScores *bool  // Optional: enforce minimum scores from grading rubrics. Default: true
+}
+
+// ApplyDefaults sets default values for optional configuration fields.
+// This method modifies the config in-place and returns a pointer to it for method chaining.
+func (c *EvalClientConfig) ApplyDefaults() *EvalClientConfig {
+	if c.MaxSteps <= 0 {
+		c.MaxSteps = 10
+	}
+	if c.MaxTokens <= 0 {
+		c.MaxTokens = 4096
+	}
+	if c.CacheTTL == "" {
+		c.CacheTTL = "5m" // Default to 5-minute cache (free)
+	}
+	if c.EnablePromptCaching == nil {
+		c.EnablePromptCaching = toPtr(true) // Enable prompt caching by default for cost savings
+	}
+	if c.EnforceMinimumScores == nil {
+		c.EnforceMinimumScores = toPtr(true) // Enable minimum score enforcement by default
+	}
+	return c
 }
 
 type EvalClient struct {
@@ -58,28 +83,15 @@ type EvalClient struct {
 }
 
 func NewEvalClient(config EvalClientConfig) *EvalClient {
+	// Apply defaults for optional fields
+	config.ApplyDefaults()
+
 	opts := []option.RequestOption{}
 	if config.APIKey != "" {
 		opts = append(opts, option.WithAPIKey(config.APIKey))
 	}
 	if config.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(config.BaseURL))
-	}
-
-	// Apply defaults for optional fields
-	if config.MaxSteps <= 0 {
-		config.MaxSteps = 10
-	}
-	if config.MaxTokens <= 0 {
-		config.MaxTokens = 4096
-	}
-	// Enable prompt caching by default for cost savings
-	if config.EnablePromptCaching == nil {
-		enabled := true
-		config.EnablePromptCaching = &enabled
-	}
-	if config.CacheTTL == "" {
-		config.CacheTTL = "5m" // Default to 5-minute cache (free)
 	}
 
 	return &EvalClient{
@@ -398,6 +410,17 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 	} else {
 		result.Grade = grade
 		trace.Grading = gradingTrace
+
+		// Check minimum scores if enforcement is enabled
+		if ec.config.EnforceMinimumScores != nil && *ec.config.EnforceMinimumScores {
+			if scoreErr := eval.GradingRubric.CheckMinimumScores(grade); scoreErr != nil {
+				log.Warn().
+					Str("eval", eval.Name).
+					Err(scoreErr).
+					Msg("Eval failed minimum score requirements")
+				result.Error = scoreErr
+			}
+		}
 	}
 
 	// Include grading cache metrics in totals
@@ -434,6 +457,104 @@ func (ec *EvalClient) RunEvals(ctx context.Context, evals []Eval) ([]EvalRunResu
 	return results, nil
 }
 
+// formatDimensionCriteria formats a single dimension's criteria for the grading prompt
+func (ec *EvalClient) formatDimensionCriteria(dimension string, criteria *DimensionCriteria) string {
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf("### %s\n", dimension))
+
+	if criteria.Description != "" {
+		sb.WriteString(fmt.Sprintf("%s\n\n", criteria.Description))
+	}
+
+	if len(criteria.MustHave) > 0 {
+		sb.WriteString("**Must have for high scores (4-5):**\n")
+		for _, item := range criteria.MustHave {
+			sb.WriteString(fmt.Sprintf("- %s\n", item))
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(criteria.NiceToHave) > 0 {
+		sb.WriteString("**Nice to have:**\n")
+		for _, item := range criteria.NiceToHave {
+			sb.WriteString(fmt.Sprintf("- %s\n", item))
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(criteria.Penalties) > 0 {
+		sb.WriteString("**Score reductions:**\n")
+		for _, item := range criteria.Penalties {
+			sb.WriteString(fmt.Sprintf("- %s\n", item))
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+// buildGradingPrompt constructs the full grading prompt including rubric criteria
+func (ec *EvalClient) buildGradingPrompt(eval Eval, evalResult *EvalResult, execTrace *EvalTrace) string {
+	var prompt strings.Builder
+
+	// Standard context
+	prompt.WriteString(fmt.Sprintf("Here is the user input: %s\n", evalResult.Prompt))
+	prompt.WriteString(fmt.Sprintf("Here is the LLM's answer: %s\n", evalResult.RawResponse))
+
+	// Add tool execution context
+	if execTrace != nil && execTrace.ToolCallCount > 0 {
+		prompt.WriteString("\n\nTool Execution Context:\n")
+		prompt.WriteString("The LLM had access to and successfully called the following tools to gather information:\n")
+		for _, step := range execTrace.Steps {
+			for _, toolCall := range step.ToolCalls {
+				prompt.WriteString(fmt.Sprintf("\n- Tool: '%s'\n", toolCall.ToolName))
+				if toolCall.Success {
+					prompt.WriteString("  Status: SUCCESS\n")
+					if len(toolCall.Output) > 0 {
+						// Include the actual tool output so grader can verify data accuracy
+						prompt.WriteString(fmt.Sprintf("  Returned data: %s\n", string(toolCall.Output)))
+					}
+				} else {
+					prompt.WriteString(fmt.Sprintf("  Status: FAILED - %s\n", toolCall.Error))
+				}
+			}
+		}
+		prompt.WriteString("\nThe LLM's answer should be evaluated based on how well it used this tool-provided data.\n")
+	}
+
+	// Add rubric criteria if provided
+	if eval.GradingRubric != nil {
+		prompt.WriteString("\n\n## Custom Grading Criteria\n\n")
+		prompt.WriteString("Use the following specific criteria when scoring this response:\n\n")
+
+		if eval.GradingRubric.Accuracy != nil {
+			prompt.WriteString(ec.formatDimensionCriteria("Accuracy", eval.GradingRubric.Accuracy))
+		}
+		if eval.GradingRubric.Completeness != nil {
+			prompt.WriteString(ec.formatDimensionCriteria("Completeness", eval.GradingRubric.Completeness))
+		}
+		if eval.GradingRubric.Relevance != nil {
+			prompt.WriteString(ec.formatDimensionCriteria("Relevance", eval.GradingRubric.Relevance))
+		}
+		if eval.GradingRubric.Clarity != nil {
+			prompt.WriteString(ec.formatDimensionCriteria("Clarity", eval.GradingRubric.Clarity))
+		}
+		if eval.GradingRubric.Reasoning != nil {
+			prompt.WriteString(ec.formatDimensionCriteria("Reasoning", eval.GradingRubric.Reasoning))
+		}
+
+		if len(eval.GradingRubric.MinimumScores) > 0 {
+			prompt.WriteString("\n### Minimum Acceptable Scores:\n")
+			for dim, score := range eval.GradingRubric.MinimumScores {
+				prompt.WriteString(fmt.Sprintf("- %s: %d/5\n", dim, score))
+			}
+		}
+	}
+
+	return prompt.String()
+}
+
 // gradeWithTrace grades an evaluation result and returns complete trace data
 func (ec *EvalClient) gradeWithTrace(ctx context.Context, eval Eval, evalResult *EvalResult, execTrace *EvalTrace) (*GradeResult, *GradingTrace, error) {
 	trace := &GradingTrace{
@@ -443,32 +564,8 @@ func (ec *EvalClient) gradeWithTrace(ctx context.Context, eval Eval, evalResult 
 		StartTime:      time.Now(),
 	}
 
-	// Build tool execution summary for grading context
-	var toolSummary strings.Builder
-	if execTrace != nil && execTrace.ToolCallCount > 0 {
-		toolSummary.WriteString("\n\nTool Execution Context:\n")
-		toolSummary.WriteString("The LLM had access to and successfully called the following tools to gather information:\n")
-		for _, step := range execTrace.Steps {
-			for _, toolCall := range step.ToolCalls {
-				toolSummary.WriteString(fmt.Sprintf("\n- Tool: '%s'\n", toolCall.ToolName))
-				if toolCall.Success {
-					toolSummary.WriteString("  Status: SUCCESS\n")
-					if len(toolCall.Output) > 0 {
-						// Include the actual tool output so grader can verify data accuracy
-						toolSummary.WriteString(fmt.Sprintf("  Returned data: %s\n", string(toolCall.Output)))
-					}
-				} else {
-					toolSummary.WriteString(fmt.Sprintf("  Status: FAILED - %s\n", toolCall.Error))
-				}
-			}
-		}
-		toolSummary.WriteString("\nThe LLM's answer should be evaluated based on how well it used this tool-provided data.\n")
-	}
-
-	// Build grading prompt
-	gradingPrompt := fmt.Sprintf(`Here is the user input: %s
-Here is the LLM's answer: %s%s`, evalResult.Prompt, evalResult.RawResponse, toolSummary.String())
-
+	// Build grading prompt with rubric guidance
+	gradingPrompt := ec.buildGradingPrompt(eval, evalResult, execTrace)
 	trace.GradingPrompt = gradingPrompt
 
 	// Determine which model to use for grading
@@ -550,10 +647,101 @@ type GradeResult struct {
 
 // Eval represents a single evaluation test case
 type Eval struct {
-	Name           string `yaml:"name" json:"name" jsonschema:"Unique identifier for this evaluation"`
-	Description    string `yaml:"description,omitempty" json:"description,omitempty" jsonschema:"Human-readable description of what this eval tests"`
-	Prompt         string `yaml:"prompt" json:"prompt" jsonschema:"The input prompt to send to the LLM"`
-	ExpectedResult string `yaml:"expected_result,omitempty" json:"expected_result,omitempty" jsonschema:"Expected behavior or result (used for documentation and grading context)"`
+	Name           string         `yaml:"name" json:"name" jsonschema:"Unique identifier for this evaluation"`
+	Description    string         `yaml:"description,omitempty" json:"description,omitempty" jsonschema:"Human-readable description of what this eval tests"`
+	Prompt         string         `yaml:"prompt" json:"prompt" jsonschema:"The input prompt to send to the LLM"`
+	ExpectedResult string         `yaml:"expected_result,omitempty" json:"expected_result,omitempty" jsonschema:"Expected behavior or result (used for documentation and grading context)"`
+	GradingRubric  *GradingRubric `yaml:"grading_rubric,omitempty" json:"grading_rubric,omitempty" jsonschema:"Optional custom grading criteria for this evaluation"`
+}
+
+// GradingRubric defines specific evaluation criteria for grading
+type GradingRubric struct {
+	// Optional: Override which dimensions to grade (defaults to all 5 standard dimensions)
+	Dimensions []string `yaml:"dimensions,omitempty" json:"dimensions,omitempty" jsonschema:"Which dimensions to grade: accuracy, completeness, relevance, clarity, reasoning"`
+
+	// Criteria for each dimension - what to look for when grading
+	Accuracy     *DimensionCriteria `yaml:"accuracy,omitempty" json:"accuracy,omitempty" jsonschema:"Specific criteria for accuracy scoring"`
+	Completeness *DimensionCriteria `yaml:"completeness,omitempty" json:"completeness,omitempty" jsonschema:"Specific criteria for completeness scoring"`
+	Relevance    *DimensionCriteria `yaml:"relevance,omitempty" json:"relevance,omitempty" jsonschema:"Specific criteria for relevance scoring"`
+	Clarity      *DimensionCriteria `yaml:"clarity,omitempty" json:"clarity,omitempty" jsonschema:"Specific criteria for clarity scoring"`
+	Reasoning    *DimensionCriteria `yaml:"reasoning,omitempty" json:"reasoning,omitempty" jsonschema:"Specific criteria for reasoning scoring"`
+
+	// Optional: Minimum acceptable scores for pass/fail
+	MinimumScores map[string]int `yaml:"minimum_scores,omitempty" json:"minimum_scores,omitempty" jsonschema:"Minimum acceptable score for each dimension (1-5)"`
+}
+
+// DimensionCriteria provides specific guidance for grading a dimension
+type DimensionCriteria struct {
+	Description string   `yaml:"description,omitempty" json:"description,omitempty" jsonschema:"What this dimension means for this specific eval"`
+	MustHave    []string `yaml:"must_have,omitempty" json:"must_have,omitempty" jsonschema:"Required elements for high scores (4-5)"`
+	NiceToHave  []string `yaml:"nice_to_have,omitempty" json:"nice_to_have,omitempty" jsonschema:"Optional elements that improve scores"`
+	Penalties   []string `yaml:"penalties,omitempty" json:"penalties,omitempty" jsonschema:"Elements that reduce scores (errors, omissions, inaccuracies)"`
+}
+
+// Validate checks that the rubric is well-formed
+func (r *GradingRubric) Validate() error {
+	if r == nil {
+		return nil // nil rubric is valid (optional field)
+	}
+
+	validDimensions := map[string]bool{
+		"accuracy": true, "completeness": true,
+		"relevance": true, "clarity": true, "reasoning": true,
+	}
+
+	// Validate dimensions list if provided
+	for _, dim := range r.Dimensions {
+		if !validDimensions[dim] {
+			return fmt.Errorf("invalid dimension '%s': must be one of: accuracy, completeness, relevance, clarity, reasoning", dim)
+		}
+	}
+
+	// Validate minimum scores
+	for dim, score := range r.MinimumScores {
+		if !validDimensions[dim] {
+			return fmt.Errorf("invalid dimension in minimum_scores '%s': must be one of: accuracy, completeness, relevance, clarity, reasoning", dim)
+		}
+		if score < 1 || score > 5 {
+			return fmt.Errorf("minimum score for '%s' must be between 1 and 5, got %d", dim, score)
+		}
+	}
+
+	return nil
+}
+
+// CheckMinimumScores verifies that graded scores meet minimum thresholds
+func (r *GradingRubric) CheckMinimumScores(grade *GradeResult) error {
+	if r == nil || len(r.MinimumScores) == 0 {
+		return nil // No minimum scores to enforce
+	}
+
+	var failures []string
+
+	for dim, minScore := range r.MinimumScores {
+		var actualScore int
+		switch dim {
+		case "accuracy":
+			actualScore = grade.Accuracy
+		case "completeness":
+			actualScore = grade.Completeness
+		case "relevance":
+			actualScore = grade.Relevance
+		case "clarity":
+			actualScore = grade.Clarity
+		case "reasoning":
+			actualScore = grade.Reasoning
+		}
+
+		if actualScore < minScore {
+			failures = append(failures, fmt.Sprintf("%s: got %d, required %d", dim, actualScore, minScore))
+		}
+	}
+
+	if len(failures) > 0 {
+		return fmt.Errorf("eval failed minimum score requirements: %s. Review grading criteria or adjust rubric thresholds", strings.Join(failures, "; "))
+	}
+
+	return nil
 }
 
 // EvalRunResult combines the eval configuration with its execution results
@@ -622,4 +810,10 @@ type GradingTrace struct {
 	CacheCreationInputTokens int           `json:"cache_creation_input_tokens"` // Tokens used to create cache
 	CacheReadInputTokens     int           `json:"cache_read_input_tokens"`     // Tokens read from cache
 	Error                    string        `json:"error,omitempty"`             // Error message if grading failed
+}
+
+// toPtr returns a pointer to the provided value.
+// This generic helper simplifies creating pointers to literals or values.
+func toPtr[T any](v T) *T {
+	return &v
 }

@@ -24,15 +24,16 @@ type MaxSteps int
 
 // EvalConfig represents the top-level configuration for running evaluations
 type EvalConfig struct {
-	Model               string          `yaml:"model" json:"model" jsonschema:"Anthropic model ID to use for evaluations"`
-	GradingModel        string          `yaml:"grading_model,omitempty" json:"grading_model,omitempty" jsonschema:"Anthropic model ID to use for grading (defaults to same as model)"`
-	Timeout             string          `yaml:"timeout,omitempty" json:"timeout,omitempty" jsonschema:"Timeout duration for each evaluation (e.g., '2m', '30s')"`
-	MaxSteps            MaxSteps        `yaml:"max_steps,omitempty" json:"max_steps,omitempty" jsonschema:"Maximum number of agentic loop iterations"`
-	MaxTokens           MaxTokens       `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty" jsonschema:"Maximum tokens per LLM request"`
-	EnablePromptCaching *bool           `yaml:"enable_prompt_caching,omitempty" json:"enable_prompt_caching,omitempty" jsonschema:"Enable Anthropic prompt caching for tool definitions and system prompts (defaults to true for cost savings)"`
-	CacheTTL            string          `yaml:"cache_ttl,omitempty" json:"cache_ttl,omitempty" jsonschema:"Cache time-to-live: '5m' (default, free) or '1h' (premium). Requires enable_prompt_caching=true"`
-	MCPServer           MCPServerConfig `yaml:"mcp_server" json:"mcp_server" jsonschema:"Configuration for the MCP server to evaluate"`
-	Evals               []Eval          `yaml:"evals" json:"evals" jsonschema:"List of evaluation test cases to run"`
+	Model                string          `yaml:"model" json:"model" jsonschema:"Anthropic model ID to use for evaluations"`
+	GradingModel         string          `yaml:"grading_model,omitempty" json:"grading_model,omitempty" jsonschema:"Anthropic model ID to use for grading (defaults to same as model)"`
+	Timeout              string          `yaml:"timeout,omitempty" json:"timeout,omitempty" jsonschema:"Timeout duration for each evaluation (e.g., '2m', '30s')"`
+	MaxSteps             MaxSteps        `yaml:"max_steps,omitempty" json:"max_steps,omitempty" jsonschema:"Maximum number of agentic loop iterations"`
+	MaxTokens            MaxTokens       `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty" jsonschema:"Maximum tokens per LLM request"`
+	EnablePromptCaching  *bool           `yaml:"enable_prompt_caching,omitempty" json:"enable_prompt_caching,omitempty" jsonschema:"Enable Anthropic prompt caching for tool definitions and system prompts (defaults to true for cost savings)"`
+	CacheTTL             string          `yaml:"cache_ttl,omitempty" json:"cache_ttl,omitempty" jsonschema:"Cache time-to-live: '5m' (default, free) or '1h' (premium). Requires enable_prompt_caching=true"`
+	EnforceMinimumScores *bool           `yaml:"enforce_minimum_scores,omitempty" json:"enforce_minimum_scores,omitempty" jsonschema:"Enforce minimum scores from grading rubrics (defaults to true; set to false to disable)"`
+	MCPServer            MCPServerConfig `yaml:"mcp_server" json:"mcp_server" jsonschema:"Configuration for the MCP server to evaluate"`
+	Evals                []Eval          `yaml:"evals" json:"evals" jsonschema:"List of evaluation test cases to run"`
 }
 
 // LoadConfig loads an evaluation configuration from a YAML or JSON file.
@@ -68,6 +69,13 @@ func LoadConfig(filePath string) (*EvalConfig, error) {
 	}
 	if len(config.Evals) == 0 {
 		return nil, fmt.Errorf("at least one eval is required in config")
+	}
+
+	// Validate grading rubrics for each eval
+	for i, eval := range config.Evals {
+		if err := eval.GradingRubric.Validate(); err != nil {
+			return nil, fmt.Errorf("eval[%d] '%s' has invalid rubric: %w", i, eval.Name, err)
+		}
 	}
 
 	return &config, nil
