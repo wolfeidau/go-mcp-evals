@@ -56,39 +56,42 @@ type EvalClientConfig struct {
 	EnforceMinimumScores *bool  // Optional: enforce minimum scores from grading rubrics. Default: true
 }
 
+// ApplyDefaults sets default values for optional configuration fields.
+// This method modifies the config in-place and returns a pointer to it for method chaining.
+func (c *EvalClientConfig) ApplyDefaults() *EvalClientConfig {
+	if c.MaxSteps <= 0 {
+		c.MaxSteps = 10
+	}
+	if c.MaxTokens <= 0 {
+		c.MaxTokens = 4096
+	}
+	if c.CacheTTL == "" {
+		c.CacheTTL = "5m" // Default to 5-minute cache (free)
+	}
+	if c.EnablePromptCaching == nil {
+		c.EnablePromptCaching = toPtr(true) // Enable prompt caching by default for cost savings
+	}
+	if c.EnforceMinimumScores == nil {
+		c.EnforceMinimumScores = toPtr(true) // Enable minimum score enforcement by default
+	}
+	return c
+}
+
 type EvalClient struct {
 	client anthropic.Client
 	config EvalClientConfig
 }
 
 func NewEvalClient(config EvalClientConfig) *EvalClient {
+	// Apply defaults for optional fields
+	config.ApplyDefaults()
+
 	opts := []option.RequestOption{}
 	if config.APIKey != "" {
 		opts = append(opts, option.WithAPIKey(config.APIKey))
 	}
 	if config.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(config.BaseURL))
-	}
-
-	// Apply defaults for optional fields
-	if config.MaxSteps <= 0 {
-		config.MaxSteps = 10
-	}
-	if config.MaxTokens <= 0 {
-		config.MaxTokens = 4096
-	}
-	if config.CacheTTL == "" {
-		config.CacheTTL = "5m" // Default to 5-minute cache (free)
-	}
-
-	if config.EnablePromptCaching == nil {
-		enabled := true
-		config.EnablePromptCaching = &enabled // Enable prompt caching by default for cost savings
-	}
-
-	if config.EnforceMinimumScores == nil {
-		enabled := true
-		config.EnforceMinimumScores = &enabled // Enable minimum score enforcement by default
 	}
 
 	return &EvalClient{
@@ -807,4 +810,10 @@ type GradingTrace struct {
 	CacheCreationInputTokens int           `json:"cache_creation_input_tokens"` // Tokens used to create cache
 	CacheReadInputTokens     int           `json:"cache_read_input_tokens"`     // Tokens read from cache
 	Error                    string        `json:"error,omitempty"`             // Error message if grading failed
+}
+
+// toPtr returns a pointer to the provided value.
+// This generic helper simplifies creating pointers to literals or values.
+func toPtr[T any](v T) *T {
+	return &v
 }
