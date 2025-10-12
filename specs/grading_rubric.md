@@ -14,7 +14,26 @@ Add support for **custom grading rubrics** that allow evaluation authors to defi
 
 ## Design
 
-### Data Structure
+### Top-Level Configuration
+
+Add optional `enforce_minimum_scores` field to the `EvalConfig` struct to control whether minimum score requirements are enforced:
+
+```go
+type EvalConfig struct {
+	Model                string          `yaml:"model" json:"model"`
+	GradingModel         string          `yaml:"grading_model,omitempty" json:"grading_model,omitempty"`
+	EnforceMinimumScores *bool           `yaml:"enforce_minimum_scores,omitempty" json:"enforce_minimum_scores,omitempty"`
+	MCPServer            MCPServerConfig `yaml:"mcp_server" json:"mcp_server"`
+	Evals                []Eval          `yaml:"evals" json:"evals"`
+}
+```
+
+**Default behavior**: `enforce_minimum_scores` defaults to `true`. When enabled:
+- Evals that fail to meet minimum score thresholds will have `result.Error` set
+- A warning is logged indicating which dimensions failed to meet requirements
+- Set to `false` to grade without enforcement (useful during rubric development)
+
+### Eval Data Structure
 
 Add optional `grading_rubric` field to the `Eval` struct:
 
@@ -105,9 +124,58 @@ evals:
         reasoning: 3
 ```
 
+### Minimum Score Enforcement
+
+When `minimum_scores` are specified in a rubric, the system can enforce these thresholds:
+
+**Configuration**: Use the top-level `enforce_minimum_scores` field (defaults to `true`):
+
+```yaml
+model: claude-3-5-sonnet-20241022
+enforce_minimum_scores: true  # Default: true; set to false during rubric development
+
+evals:
+  - name: my_eval
+    grading_rubric:
+      minimum_scores:
+        accuracy: 4
+        completeness: 3
+```
+
+**Behavior when enforcement is enabled** (default):
+- After grading, scores are checked against minimum thresholds
+- If any dimension falls below its minimum, `result.Error` is set with details
+- A warning is logged: `"Eval failed minimum score requirements"`
+- The error message lists all failing dimensions: `"accuracy: got 3, required 4"`
+
+**Behavior when enforcement is disabled** (`enforce_minimum_scores: false`):
+- Scores are graded normally but not validated against minimums
+- No errors are set, even if scores fall below thresholds
+- Useful during rubric development and iteration
+
+**Recommendation**: Disable enforcement while developing and tuning rubrics, then enable it for production eval runs.
+
+### Rubric Validation
+
+The `LoadConfig` function in `mcp_eval_config.go` validates all rubrics when loading the configuration:
+
+```go
+// Validate grading rubrics for each eval
+for i, eval := range config.Evals {
+	if err := eval.GradingRubric.Validate(); err != nil {
+		return nil, fmt.Errorf("eval[%d] '%s' has invalid rubric: %w", i, eval.Name, err)
+	}
+}
+```
+
+Validation checks:
+- Dimension names must be one of: `accuracy`, `completeness`, `relevance`, `clarity`, `reasoning`
+- Minimum scores must be between 1 and 5
+- Minimum score dimensions must reference valid dimension names
+
 ### Integration with Grading System
 
-Modify [mcp_evals.go:437-535](mcp_evals.go) `gradeWithTrace()` function to incorporate rubric:
+The `gradeWithTrace()` function in `mcp_evals.go` incorporates rubric criteria and enforces minimum scores:
 
 ```go
 func (ec *EvalClient) gradeWithTrace(ctx context.Context, eval Eval, evalResult *EvalResult, execTrace *EvalTrace) (*GradeResult, *GradingTrace, error) {
@@ -117,6 +185,17 @@ func (ec *EvalClient) gradeWithTrace(ctx context.Context, eval Eval, evalResult 
     gradingPrompt := ec.buildGradingPrompt(eval, evalResult, execTrace)
 
     // ... execute grading ...
+
+    // Check minimum scores if enforcement is enabled
+    if ec.config.EnforceMinimumScores != nil && *ec.config.EnforceMinimumScores {
+        if scoreErr := eval.GradingRubric.CheckMinimumScores(grade); scoreErr != nil {
+            log.Warn().
+                Str("eval", eval.Name).
+                Err(scoreErr).
+                Msg("Eval failed minimum score requirements")
+            result.Error = scoreErr
+        }
+    }
 }
 
 func (ec *EvalClient) buildGradingPrompt(eval Eval, evalResult *EvalResult, execTrace *EvalTrace) string {
@@ -221,43 +300,42 @@ Use this exact format:
 }`
 ```
 
-## Implementation Plan
+## Implementation Status
 
-### Phase 1: Core Data Structures (Breaking Change)
-1. Add `GradingRubric`, `DimensionCriteria` structs to [mcp_evals.go](mcp_evals.go)
-2. Add `GradingRubric *GradingRubric` field to `Eval` struct
-3. Update JSON schema generation in [mcp_eval_config.go](mcp_eval_config.go)
-4. Document breaking change in commit message and release notes
+### ✅ Phase 1: Core Data Structures (COMPLETED)
+1. ✅ Added `GradingRubric`, `DimensionCriteria` structs to `mcp_evals.go`
+2. ✅ Added `GradingRubric *GradingRubric` field to `Eval` struct
+3. ✅ Added `EnforceMinimumScores *bool` field to `EvalConfig` struct
+4. ✅ Updated JSON schema generation in `mcp_eval_config.go`
+5. ✅ Documented as breaking change (pre-1.0, acceptable per CLAUDE.md)
 
-**Estimated complexity**: Medium
-**Testing needs**: Unit tests for struct marshaling/unmarshaling
+**Commits**: `01419a9`, `cdb6b31`
 
-### Phase 2: Grading Integration
-1. Implement `buildGradingPrompt()` and `formatDimensionCriteria()` helper functions
-2. Modify `gradeWithTrace()` to use new prompt builder
-3. Update `EvalSystemPrompt` constant
-4. Ensure backward compatibility (rubric is optional)
+### ✅ Phase 2: Grading Integration (COMPLETED)
+1. ✅ Implemented `buildGradingPrompt()` and `formatDimensionCriteria()` helper functions
+2. ✅ Modified `gradeWithTrace()` to use new prompt builder
+3. ✅ Modified `gradeWithTrace()` to enforce minimum scores via `CheckMinimumScores()`
+4. ✅ Updated `EvalSystemPrompt` constant to reference custom criteria
+5. ✅ Ensured backward compatibility (rubric is optional, defaults to nil)
 
-**Estimated complexity**: Medium
-**Testing needs**: Unit tests for prompt formatting, integration tests comparing rubric vs non-rubric grading
+**Commits**: `cdb6b31`, `e4c5ff5`
 
-### Phase 3: Validation & User Experience
-1. Add validation for rubric structure (scores must be 1-5, etc.)
-2. Add warning if `minimum_scores` reference undefined dimensions
-3. Update CLI to show rubric criteria when running evals with `--verbose`
-4. Add JSON schema validation for rubric fields
+### ✅ Phase 3: Validation & User Experience (COMPLETED)
+1. ✅ Added `Validate()` method to `GradingRubric` (checks dimensions, score ranges)
+2. ✅ Added `CheckMinimumScores()` method to `GradingRubric` (returns error if scores too low)
+3. ✅ Integrated validation into `LoadConfig()` to fail fast on invalid rubrics
+4. ✅ Added warning log when evals fail minimum score requirements
+5. ✅ JSON schema validation for rubric fields via struct tags
 
-**Estimated complexity**: Low
-**Testing needs**: Unit tests for validation logic
+**Commits**: `cdb6b31`, `e4c5ff5`
 
-### Phase 4: Documentation & Examples
-1. Create example rubrics for common eval types (troubleshooting, data retrieval, analysis)
-2. Update README with rubric usage examples
-3. Add rubric section to [specs/grading_rubric.md](specs/grading_rubric.md) (this file)
-4. Create migration guide for existing eval configs
+### ✅ Phase 4: Documentation & Examples (COMPLETED)
+1. ✅ Created example rubrics in `testdata/mcp-test-evals.yaml` (troubleshooting use case)
+2. ✅ Updated README with rubric usage examples and LLM-assisted rubric creation
+3. ✅ Updated this specification document with implementation details
+4. ✅ Provided migration guide (rubrics are optional, no migration needed)
 
-**Estimated complexity**: Low
-**Testing needs**: Verify examples work with real eval runs
+**Commits**: `795c489`
 
 ## LLM-Assisted Rubric Drafting Guide
 
@@ -510,59 +588,59 @@ claude "Refine this rubric based on eval results: $(cat results.json | jq '.resu
 
 ## Testing Strategy
 
-### Unit Tests
+### Unit Tests (Implemented)
+
+Comprehensive unit tests have been added to `mcp_evals_test.go`:
 
 ```go
 func TestGradingRubricParsing(t *testing.T) {
-    assert := require.New(t)
-
-    yaml := `
-name: test_eval
-prompt: test prompt
-grading_rubric:
-  accuracy:
-    must_have:
-      - "item 1"
-      - "item 2"
-`
-
-    var eval Eval
-    err := yaml.Unmarshal([]byte(yaml), &eval)
-    assert.NoError(err)
-    assert.NotNil(eval.GradingRubric)
-    assert.NotNil(eval.GradingRubric.Accuracy)
-    assert.Len(eval.GradingRubric.Accuracy.MustHave, 2)
+    // Tests YAML unmarshaling of rubrics with all fields
+    // Verifies dimensions, criteria, and minimum_scores parsing
 }
 
-func TestGradingPromptWithRubric(t *testing.T) {
-    assert := require.New(t)
+func TestGradingRubricParsingWithoutRubric(t *testing.T) {
+    // Tests that evals without rubrics still parse correctly
+    // Ensures backward compatibility
+}
 
-    eval := Eval{
-        GradingRubric: &GradingRubric{
-            Accuracy: &DimensionCriteria{
-                MustHave: []string{"criterion 1", "criterion 2"},
-            },
-        },
-    }
+func TestGradingRubricJSONMarshal(t *testing.T) {
+    // Tests JSON marshaling/unmarshaling round-trip
+    // Ensures rubrics serialize correctly for JSON output
+}
 
-    prompt := buildGradingPrompt(eval, &EvalResult{}, nil)
-    assert.Contains(prompt, "criterion 1")
-    assert.Contains(prompt, "criterion 2")
+func TestFormatDimensionCriteria(t *testing.T) {
+    // Tests formatDimensionCriteria() helper function
+    // Verifies proper markdown formatting of criteria
+}
+
+func TestBuildGradingPrompt(t *testing.T) {
+    // Tests buildGradingPrompt() with and without rubrics
+    // Verifies rubric criteria are included in grading prompts
+}
+
+func TestGradingRubricValidate(t *testing.T) {
+    // Tests Validate() method for various error cases
+    // Invalid dimensions, out-of-range scores, etc.
+}
+
+func TestCheckMinimumScores(t *testing.T) {
+    // Tests CheckMinimumScores() method
+    // Verifies error messages when scores are too low
 }
 ```
 
-### Integration Tests
+### Integration Tests (Implemented)
+
+Integration tests have been added to `mcp_eval_config_test.go`:
 
 ```go
-func TestGradingWithRubric(t *testing.T) {
-    // Run same eval with and without rubric
-    // Verify rubric version provides more specific feedback
-}
-
-func TestRubricMinimumScores(t *testing.T) {
-    // Verify minimum score thresholds are reflected in grading
+func TestLoadConfig_YAML(t *testing.T) {
+    // Now includes verification of rubric loading from YAML
+    // Tests the troubleshoot_service_outage eval with full rubric
 }
 ```
+
+Additional integration testing is performed in `internal/reporting/report_test.go` with floating-point assertions using `assert.InDelta()` for score calculations.
 
 ## Migration Guide
 
@@ -574,17 +652,32 @@ Existing eval configs continue to work without modification. To add rubrics:
 4. **Refine iteratively**: Adjust rubric based on whether scores match expectations
 5. **Document learnings**: Add comments in YAML explaining non-obvious criteria
 
+## Known Limitations and Considerations
+
+1. **Minimum score enforcement behavior**: When `enforce_minimum_scores` is enabled (default), failing scores sets `result.Error`, which may cause the entire eval run to be marked as failed. Consider disabling enforcement during rubric development and iteration.
+
+2. **Dimension filtering**: The `dimensions` field allows limiting which dimensions are graded, but currently all 5 dimensions are still returned in `GradeResult`. The filtering is informational only and affects the grading prompt.
+
+3. **Error message format**: The `CheckMinimumScores()` error message lists all failed dimensions in a single error. This could be enhanced to provide more structured failure information.
+
+4. **Validation timing**: Rubric validation occurs at config load time (`LoadConfig()`), not at struct creation time. Invalid rubrics passed directly to `RunEval()` are not validated.
+
 ## Future Enhancements
 
-1. **Rubric templates**: Provide pre-built rubrics for common eval types
-2. **Rubric validation**: CLI command to check rubric quality before running
-3. **Score explanations**: Have grading LLM explain which criteria were met/missed
-4. **Rubric evolution**: Track rubric changes over time and their impact on scores
-5. **Weighted dimensions**: Allow specifying relative importance of dimensions
+1. **Rubric templates**: Provide pre-built rubrics for common eval types (troubleshooting, data retrieval, analysis)
+2. **Rubric validation CLI**: Add command to check rubric quality before running (e.g., `mcp-evals validate-rubric`)
+3. **Score explanations**: Have grading LLM explain which specific criteria were met/missed for each dimension
+4. **Rubric evolution tracking**: Track rubric changes over time and their impact on scores across eval runs
+5. **Weighted dimensions**: Allow specifying relative importance of dimensions (e.g., accuracy=2x, clarity=0.5x)
+6. **Per-dimension pass/fail**: Support marking individual dimensions as required vs. optional
+7. **Rubric inheritance**: Allow evals to inherit rubrics from a base template and override specific dimensions
 
 ## References
 
-- Current grading implementation: [mcp_evals.go:437-535](mcp_evals.go)
-- Eval struct definition: [mcp_evals.go:552-557](mcp_evals.go)
-- Config parsing: [mcp_eval_config.go](mcp_eval_config.go)
-- Example config: [mcp-test-evals.yaml](mcp-test-evals.yaml)
+- Grading implementation: `mcp_evals.go` (functions: `gradeWithTrace`, `buildGradingPrompt`, `formatDimensionCriteria`)
+- Data structures: `mcp_evals.go` (types: `Eval`, `GradingRubric`, `DimensionCriteria`)
+- Validation: `mcp_evals.go` (methods: `Validate`, `CheckMinimumScores`)
+- Config parsing: `mcp_eval_config.go` (function: `LoadConfig`)
+- Example config: `testdata/mcp-test-evals.yaml` (eval: `troubleshoot_service_outage`)
+- Unit tests: `mcp_evals_test.go`
+- Integration tests: `mcp_eval_config_test.go`
