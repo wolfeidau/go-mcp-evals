@@ -2,10 +2,10 @@
 set -e
 
 # install.sh - Install the latest release of mcp-evals
-# Usage: curl -sSfL https://raw.githubusercontent.com/wolfeidau/go-mcp-evals/main/install.sh | sh
+# Usage: curl -sSfL https://raw.githubusercontent.com/wolfeidau/mcp-evals/main/install.sh | sh
 
 # Repository information
-REPO="wolfeidau/go-mcp-evals"
+REPO="wolfeidau/mcp-evals"
 BINARY_NAME="mcp-evals"
 
 # Detect OS and architecture
@@ -70,7 +70,7 @@ get_latest_release() {
 verify_checksum() {
   # Strip 'v' prefix from VERSION for checksums filename
   VERSION_NO_V=$(echo "$VERSION" | sed 's/^v//')
-  CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/go-mcp-evals_${VERSION_NO_V}_checksums.txt"
+  CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/mcp-evals_${VERSION_NO_V}_checksums.txt"
 
   echo "Downloading checksums..."
 
@@ -114,12 +114,12 @@ verify_checksum() {
 # Download and install the binary
 install_binary() {
   # Construct archive name based on goreleaser template
-  # Note: Archive is named go-mcp-evals but contains mcp-evals binary
+  # Note: Archive is named mcp-evals but contains mcp-evals binary
   if [ "$OS" = "Windows" ]; then
-    ARCHIVE_NAME="go-mcp-evals_${OS}_${ARCH}.zip"
+    ARCHIVE_NAME="mcp-evals_${OS}_${ARCH}.zip"
     ARCHIVE_EXT="zip"
   else
-    ARCHIVE_NAME="go-mcp-evals_${OS}_${ARCH}.tar.gz"
+    ARCHIVE_NAME="mcp-evals_${OS}_${ARCH}.tar.gz"
     ARCHIVE_EXT="tar.gz"
   fi
 

@@ -1,6 +1,6 @@
 package commands
 
-import evaluations "github.com/wolfeidau/go-mcp-evals"
+import evaluations "github.com/wolfeidau/mcp-evals"
 
 // Globals contains flags shared across all commands
 type Globals struct {

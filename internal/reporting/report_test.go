@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	evaluations "github.com/wolfeidau/go-mcp-evals"
-	"github.com/wolfeidau/go-mcp-evals/internal/help"
+	evaluations "github.com/wolfeidau/mcp-evals"
+	"github.com/wolfeidau/mcp-evals/internal/help"
 )
 
 // stripANSI removes ANSI escape codes from a string

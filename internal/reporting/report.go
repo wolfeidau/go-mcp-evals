@@ -11,8 +11,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/charmbracelet/lipgloss/v2/table"
-	evaluations "github.com/wolfeidau/go-mcp-evals"
-	"github.com/wolfeidau/go-mcp-evals/internal/help"
+	evaluations "github.com/wolfeidau/mcp-evals"
+	"github.com/wolfeidau/mcp-evals/internal/help"
 )
 
 // PrintStyledReport generates a colorized, styled report from evaluation results
