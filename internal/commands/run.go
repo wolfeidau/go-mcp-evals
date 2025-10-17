@@ -10,9 +10,9 @@ import (
 
 	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/rs/zerolog/log"
-	evaluations "github.com/wolfeidau/go-mcp-evals"
-	"github.com/wolfeidau/go-mcp-evals/internal/help"
-	"github.com/wolfeidau/go-mcp-evals/internal/reporting"
+	evaluations "github.com/wolfeidau/mcp-evals"
+	"github.com/wolfeidau/mcp-evals/internal/help"
+	"github.com/wolfeidau/mcp-evals/internal/reporting"
 )
 
 // RunCmd handles the run command

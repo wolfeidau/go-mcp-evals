@@ -1,4 +1,4 @@
-module github.com/wolfeidau/go-mcp-evals
+module github.com/wolfeidau/mcp-evals
 
 go 1.25.0
 

@@ -3,7 +3,7 @@ package commands
 import (
 	"fmt"
 
-	evaluations "github.com/wolfeidau/go-mcp-evals"
+	evaluations "github.com/wolfeidau/mcp-evals"
 )
 
 // SchemaCmd handles the schema command

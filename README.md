@@ -1,4 +1,4 @@
-# go-mcp-evals
+# mcp-evals
 
 A Go library and CLI for evaluating Model Context Protocol (MCP) servers using Claude. This tool connects to an MCP server, runs an agentic evaluation loop where Claude uses the server's tools to answer questions, and grades the responses across five dimensions: accuracy, completeness, relevance, clarity, and reasoning.
 
@@ -13,13 +13,13 @@ A Go library and CLI for evaluating Model Context Protocol (MCP) servers using C
 ### Using install script (recommended)
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/wolfeidau/go-mcp-evals/main/install.sh | sh
+curl -sSfL https://raw.githubusercontent.com/wolfeidau/mcp-evals/main/install.sh | sh
 ```
 
 ### Using Go
 
 ```bash
-go install github.com/wolfeidau/go-mcp-evals/cmd/mcp-evals@latest
+go install github.com/wolfeidau/mcp-evals/cmd/mcp-evals@latest
 ```
 
 ## Quick Start

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	evaluations "github.com/wolfeidau/go-mcp-evals"
-	"github.com/wolfeidau/go-mcp-evals/internal/reporting"
+	evaluations "github.com/wolfeidau/mcp-evals"
+	"github.com/wolfeidau/mcp-evals/internal/reporting"
 )
 
 // ReportCmd handles the report command

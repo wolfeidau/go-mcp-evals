@@ -2,8 +2,8 @@ package main
 
 import (
 	"github.com/alecthomas/kong"
-	"github.com/wolfeidau/go-mcp-evals/internal/commands"
-	"github.com/wolfeidau/go-mcp-evals/internal/help"
+	"github.com/wolfeidau/mcp-evals/internal/commands"
+	"github.com/wolfeidau/mcp-evals/internal/help"
 )
 
 var (
