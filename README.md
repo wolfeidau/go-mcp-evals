@@ -55,6 +55,115 @@ mcp-evals run --config evals.yaml
 
 See `mcp-evals <command> --help` for detailed usage.
 
+## Advanced Features
+
+### Environment Variable Interpolation
+
+Configuration files support environment variable interpolation using shell syntax. This enables matrix testing across different MCP server versions without duplicating configuration.
+
+**Supported syntax:**
+- `${VAR}` - Expand environment variable
+- `$VAR` - Short form expansion
+- `${VAR:-default}` - Use default value if unset
+- `${VAR:+value}` - Use value if VAR is set
+
+**Example configuration** (`matrix.yaml`):
+```yaml
+model: claude-3-5-sonnet-20241022
+mcp_server:
+  command: ${MCP_SERVER_PATH}
+  args:
+    - --port=${SERVER_PORT:-8080}
+  env:
+    - VERSION=${SERVER_VERSION}
+
+evals:
+  - name: version_check
+    prompt: "What version are you running?"
+    expected_result: "Should report ${SERVER_VERSION}"
+```
+
+**Matrix testing across versions:**
+```bash
+# Test v1.0.0
+export MCP_SERVER_PATH=/releases/v1.0.0/mcp-server
+export SERVER_VERSION=1.0.0
+mcp-evals run --config matrix.yaml --trace-dir traces/v1.0.0
+
+# Test v2.0.0
+export MCP_SERVER_PATH=/releases/v2.0.0/mcp-server
+export SERVER_VERSION=2.0.0
+mcp-evals run --config matrix.yaml --trace-dir traces/v2.0.0
+```
+
+**CI/CD matrix example (Buildkite)**:
+```yaml
+steps:
+  - label: ":test_tube: MCP Evals - {{matrix.version}}"
+    command: |
+      export MCP_SERVER_PATH=/releases/{{matrix.version}}/mcp-server
+      export SERVER_VERSION={{matrix.version}}
+      mcp-evals run --config matrix.yaml --trace-dir traces/{{matrix.version}}
+    matrix:
+      setup:
+        version: ["1.0.0", "1.1.0", "2.0.0"]
+    artifact_paths:
+      - "traces/{{matrix.version}}/*.json"
+```
+
+### Eval Filtering
+
+Run a subset of evals using the `--filter` flag with a regex pattern:
+
+```bash
+# Run single eval
+mcp-evals run --config evals.yaml --filter "^basic_addition$"
+
+# Run all auth-related evals
+mcp-evals run --config evals.yaml --filter "auth"
+
+# Run multiple specific evals
+mcp-evals run --config evals.yaml --filter "add|echo|get_user"
+
+# Run all troubleshooting evals
+mcp-evals run --config evals.yaml --filter "troubleshoot_.*"
+```
+
+This is useful for:
+- Fast iteration during development
+- Running specific test suites in CI/CD
+- Debugging individual evals without running the full suite
+
+### MCP Server Command-Line Overrides
+
+Override MCP server configuration from the command line for quick testing:
+
+```bash
+# Override server command
+mcp-evals run --config evals.yaml --mcp-command /path/to/dev/server
+
+# Override with arguments
+mcp-evals run --config evals.yaml \
+  --mcp-command /path/to/server \
+  --mcp-args="--port=9000" \
+  --mcp-args="--verbose"
+
+# Override environment variables
+mcp-evals run --config evals.yaml \
+  --mcp-env="API_TOKEN=xyz123" \
+  --mcp-env="DEBUG=true"
+
+# Combine with filtering for targeted testing
+mcp-evals run --config evals.yaml \
+  --mcp-command /path/to/dev/server \
+  --filter "^new_feature_.*"
+```
+
+This is useful for:
+- Local development without modifying config files
+- Ad-hoc testing of experimental builds
+- Debugging with different server flags
+
 ## Configuration
 
 Evaluation configs support both YAML and JSON formats:

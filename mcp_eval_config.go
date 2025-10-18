@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"gopkg.in/yaml.v3"
+	"mvdan.cc/sh/v3/shell"
 )
 
 // MCPServerConfig defines how to start the MCP server
@@ -38,22 +39,30 @@ type EvalConfig struct {
 
 // LoadConfig loads an evaluation configuration from a YAML or JSON file.
 // The file format is detected by the file extension (.yaml, .yml, or .json).
+// Environment variables in the config file are expanded using ${VAR} or $VAR syntax.
+// Supports shell-style default values: ${VAR:-default}
 func LoadConfig(filePath string) (*EvalConfig, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
+	expandedStr, err := shell.Expand(string(data), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to expand environment variables: %w", err)
+	}
+	expandedData := []byte(expandedStr)
+
 	var config EvalConfig
 	ext := strings.ToLower(filepath.Ext(filePath))
 
 	switch ext {
 	case ".yaml", ".yml":
-		if err := yaml.Unmarshal(data, &config); err != nil {
+		if err := yaml.Unmarshal(expandedData, &config); err != nil {
 			return nil, fmt.Errorf("failed to parse YAML config: %w", err)
 		}
 	case ".json":
-		if err := json.Unmarshal(data, &config); err != nil {
+		if err := json.Unmarshal(expandedData, &config); err != nil {
 			return nil, fmt.Errorf("failed to parse JSON config: %w", err)
 		}
 	default:
@@ -165,19 +174,16 @@ func ValidateConfigFile(filePath string) (*ValidationResult, error) {
 		return nil, err
 	}
 
-	// Parse the config data as generic JSON
 	var configData any
-	if err := json.Unmarshal(jsonData, &configData); err != nil {
+	if err = json.Unmarshal(jsonData, &configData); err != nil {
 		return nil, fmt.Errorf("failed to parse config as JSON: %w", err)
 	}
 
-	// Resolve the schema (handles $ref and prepares for validation)
 	resolved, err := schema.Resolve(nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve schema: %w", err)
 	}
 
-	// Validate against schema
 	validationErr := resolved.Validate(configData)
 
 	result := &ValidationResult{

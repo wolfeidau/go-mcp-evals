@@ -9,6 +9,7 @@ import (
 )
 
 func TestLoadConfig_YAML(t *testing.T) {
+	t.Parallel()
 	assert := require.New(t)
 
 	config, err := LoadConfig("testdata/mcp-test-evals.yaml")
@@ -106,6 +107,7 @@ func TestEvalClientConfig_Defaults(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+
 			assert := require.New(t)
 
 			client := NewEvalClient(tt.config)
@@ -391,4 +393,139 @@ func TestValidateConfigFile_JSONFormat(t *testing.T) {
 	result, err := ValidateConfigFile(tmpFile.Name())
 	assert.NoError(err)
 	assert.True(result.Valid)
+}
+
+func TestLoadConfig_EnvironmentVariableExpansion(t *testing.T) {
+	assert := require.New(t)
+
+	// Set test environment variables
+	t.Setenv("TEST_COMMAND", "/usr/bin/test-server")
+	t.Setenv("TEST_PORT", "8080")
+	t.Setenv("TEST_VERSION", "1.0.0")
+	t.Setenv("TEST_TOKEN", "secret-token-123")
+
+	// Create temporary config file with env vars
+	configContent := `
+model: claude-3-5-sonnet-20241022
+mcp_server:
+  command: ${TEST_COMMAND}
+  args:
+    - --port=${TEST_PORT}
+  env:
+    - VERSION=${TEST_VERSION}
+    - TOKEN=${TEST_TOKEN}
+evals:
+  - name: test
+    prompt: "Version is ${TEST_VERSION}"
+    expected_result: "Should report ${TEST_VERSION}"
+`
+
+	tmpFile, err := os.CreateTemp("", "config-envvar-*.yaml")
+	assert.NoError(err)
+	defer os.Remove(tmpFile.Name())
+
+	_, err = tmpFile.WriteString(configContent)
+	assert.NoError(err)
+	tmpFile.Close()
+
+	// Load and verify expansion
+	config, err := LoadConfig(tmpFile.Name())
+	assert.NoError(err)
+	assert.Equal("/usr/bin/test-server", config.MCPServer.Command)
+	assert.Equal([]string{"--port=8080"}, config.MCPServer.Args)
+	assert.Contains(config.MCPServer.Env, "VERSION=1.0.0")
+	assert.Contains(config.MCPServer.Env, "TOKEN=secret-token-123")
+	assert.Contains(config.Evals[0].Prompt, "Version is 1.0.0")
+	assert.Contains(config.Evals[0].ExpectedResult, "Should report 1.0.0")
+}
+
+func TestLoadConfig_UndefinedEnvironmentVariable(t *testing.T) {
+	assert := require.New(t)
+
+	configContent := `
+model: claude-3-5-sonnet-20241022
+mcp_server:
+  command: ${UNDEFINED_VAR}server
+  args: []
+evals:
+  - name: test
+    prompt: "test ${UNDEFINED_VAR}value"
+`
+
+	tmpFile, err := os.CreateTemp("", "config-undefined-*.yaml")
+	assert.NoError(err)
+	defer os.Remove(tmpFile.Name())
+
+	_, err = tmpFile.WriteString(configContent)
+	assert.NoError(err)
+	tmpFile.Close()
+
+	config, err := LoadConfig(tmpFile.Name())
+	assert.NoError(err)
+	assert.Equal("server", config.MCPServer.Command) // Undefined var expands to empty string
+	assert.Equal("test value", config.Evals[0].Prompt)
+}
+
+func TestLoadConfig_DefaultValues(t *testing.T) {
+	assert := require.New(t)
+
+	t.Setenv("CUSTOM_PORT", "9000")
+
+	configContent := `
+model: claude-3-5-sonnet-20241022
+mcp_server:
+  command: server
+  args:
+    - --port=${CUSTOM_PORT:-8080}
+    - --host=${UNDEFINED_HOST:-localhost}
+evals:
+  - name: test
+    prompt: "test"
+`
+
+	tmpFile, err := os.CreateTemp("", "config-defaults-*.yaml")
+	assert.NoError(err)
+	defer os.Remove(tmpFile.Name())
+
+	_, err = tmpFile.WriteString(configContent)
+	assert.NoError(err)
+	tmpFile.Close()
+
+	config, err := LoadConfig(tmpFile.Name())
+	assert.NoError(err)
+	assert.Equal([]string{"--port=9000", "--host=localhost"}, config.MCPServer.Args)
+}
+
+func TestLoadConfig_EnvironmentVariableInJSON(t *testing.T) {
+	assert := require.New(t)
+
+	t.Setenv("TEST_MODEL", "claude-3-5-sonnet-20241022")
+	t.Setenv("TEST_SERVER", "/path/to/server")
+
+	configContent := `{
+  "model": "${TEST_MODEL}",
+  "mcp_server": {
+    "command": "${TEST_SERVER}",
+    "args": []
+  },
+  "evals": [
+    {
+      "name": "test",
+      "prompt": "test prompt"
+    }
+  ]
+}`
+
+	tmpFile, err := os.CreateTemp("", "config-envvar-*.json")
+	assert.NoError(err)
+	defer os.Remove(tmpFile.Name())
+
+	_, err = tmpFile.WriteString(configContent)
+	assert.NoError(err)
+	tmpFile.Close()
+
+	config, err := LoadConfig(tmpFile.Name())
+	assert.NoError(err)
+	assert.Equal("claude-3-5-sonnet-20241022", config.Model)
+	assert.Equal("/path/to/server", config.MCPServer.Command)
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"github.com/charmbracelet/lipgloss/v2"
@@ -23,6 +24,12 @@ type RunCmd struct {
 	APIKey   string `help:"Anthropic API key (overrides ANTHROPIC_API_KEY env var)"`
 	BaseURL  string `help:"Base URL for Anthropic API (overrides ANTHROPIC_BASE_URL env var)"`
 	Verbose  bool   `help:"Show detailed per-eval breakdown" short:"v"`
+	Filter   string `help:"Regex pattern to filter which evals to run (matches against eval name)" short:"f"`
+
+	// MCP Server overrides
+	MCPCommand string   `help:"Override MCP server command from config"`
+	MCPArgs    []string `help:"Override MCP server args from config"`
+	MCPEnv     []string `help:"Override MCP server env vars from config"`
 }
 
 // Run executes the run command
@@ -31,6 +38,34 @@ func (r *RunCmd) Run(globals *Globals) error {
 	config, err := evaluations.LoadConfig(r.Config)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Apply MCP server overrides from command-line flags
+	if r.MCPCommand != "" {
+		config.MCPServer.Command = r.MCPCommand
+	}
+	if len(r.MCPArgs) > 0 {
+		config.MCPServer.Args = r.MCPArgs
+	}
+	if len(r.MCPEnv) > 0 {
+		config.MCPServer.Env = r.MCPEnv
+	}
+
+	// Filter evals if pattern provided
+	evalsToRun := config.Evals
+	if r.Filter != "" {
+		filtered, err := filterEvals(config.Evals, r.Filter)
+		if err != nil {
+			return fmt.Errorf("invalid filter pattern: %w", err)
+		}
+		if len(filtered) == 0 {
+			return fmt.Errorf("no evals matched filter pattern: %s", r.Filter)
+		}
+		evalsToRun = filtered
+
+		if !r.Quiet {
+			fmt.Printf("Filter '%s' matched %d of %d eval(s)\n", r.Filter, len(filtered), len(config.Evals))
+		}
 	}
 
 	// Parse timeout if specified
@@ -61,10 +96,10 @@ func (r *RunCmd) Run(globals *Globals) error {
 
 	// Run evaluations
 	if !r.Quiet {
-		fmt.Printf("Running %d evaluation(s)...\n\n", len(config.Evals))
+		fmt.Printf("Running %d evaluation(s)...\n\n", len(evalsToRun))
 	}
 
-	results, err := runEvals(ctx, client, config.Evals, r.Quiet)
+	results, err := runEvals(ctx, client, evalsToRun, r.Quiet)
 	if err != nil {
 		return err
 	}
@@ -195,4 +230,20 @@ func hasFailures(results []evaluations.EvalRunResult) bool {
 func avgScore(grade *evaluations.GradeResult) float64 {
 	sum := grade.Accuracy + grade.Completeness + grade.Relevance + grade.Clarity + grade.Reasoning
 	return float64(sum) / 5.0
+}
+
+// filterEvals filters evaluations by regex pattern matching against eval names
+func filterEvals(evals []evaluations.Eval, pattern string) ([]evaluations.Eval, error) {
+	regex, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+
+	var filtered []evaluations.Eval
+	for _, eval := range evals {
+		if regex.MatchString(eval.Name) {
+			filtered = append(filtered, eval)
+		}
+	}
+	return filtered, nil
 }
