@@ -142,3 +142,9 @@ func DefaultStyles() Styles {
 
 	return NewStyles(scheme)
 }
+
+// FormatMCPStderr formats an MCP server stderr line with consistent styling
+func (s Styles) FormatMCPStderr(line string) string {
+	prefix := s.Muted.Render("[MCP] ")
+	return prefix + s.Error.Render(line)
+}
