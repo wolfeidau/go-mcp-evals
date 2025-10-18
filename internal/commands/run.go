@@ -57,7 +57,7 @@ func (r *RunCmd) Run(globals *Globals) error {
 	}
 
 	// Create client
-	client := createClient(config, r.APIKey, resolvedBaseURL)
+	client := createClient(config, r.APIKey, resolvedBaseURL, r.Quiet)
 
 	// Run evaluations
 	if !r.Quiet {

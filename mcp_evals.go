@@ -1,6 +1,7 @@
 package evaluations
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -51,9 +52,10 @@ type EvalClientConfig struct {
 	GradingModel         string // Optional: if set, use this model for grading instead of Model
 	MaxSteps             int
 	MaxTokens            int
-	EnablePromptCaching  *bool  // Optional: enable Anthropic prompt caching for tool definitions and system prompts. Default: true
-	CacheTTL             string // Optional: cache time-to-live, either "5m" (default) or "1h". Requires EnablePromptCaching=true
-	EnforceMinimumScores *bool  // Optional: enforce minimum scores from grading rubrics. Default: true
+	EnablePromptCaching  *bool             // Optional: enable Anthropic prompt caching for tool definitions and system prompts. Default: true
+	CacheTTL             string            // Optional: cache time-to-live, either "5m" (default) or "1h". Requires EnablePromptCaching=true
+	EnforceMinimumScores *bool             // Optional: enforce minimum scores from grading rubrics. Default: true
+	StderrCallback       func(line string) // Optional: called for each line written to stderr by the MCP server subprocess
 }
 
 // ApplyDefaults sets default values for optional configuration fields.
@@ -94,6 +96,9 @@ func NewEvalClient(config EvalClientConfig) *EvalClient {
 		opts = append(opts, option.WithBaseURL(config.BaseURL))
 	}
 
+	// enable 1m tokens beta for sonnet models
+	opts = append(opts, option.WithHeader("anthropic-beta", anthropic.AnthropicBetaContext1m2025_08_07))
+
 	return &EvalClient{
 		client: anthropic.NewClient(opts...), // uses ANTHROPIC_API_KEY from env
 		config: config,
@@ -105,6 +110,25 @@ func (ec *EvalClient) loadMCPSession(ctx context.Context) (*mcp.ClientSession, *
 	mcpClient := mcp.NewClient(&mcp.Implementation{Name: "mcp-client", Version: "v1.0.0"}, nil)
 	// #nosec G204 - Command and args are provided by the library caller as part of EvalClientConfig
 	cmd := exec.Command(ec.config.Command, ec.config.Args...)
+
+	// Handle stderr based on whether a callback is provided
+	if ec.config.StderrCallback != nil {
+		stderrPipe, err := cmd.StderrPipe()
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create stderr pipe: %w", err)
+		}
+
+		// Spawn goroutine to read stderr line-by-line and invoke callback
+		go func() {
+			scanner := bufio.NewScanner(stderrPipe)
+			for scanner.Scan() {
+				ec.config.StderrCallback(scanner.Text())
+			}
+			// Ignore scanner errors as they typically occur when the process exits
+		}()
+	} else {
+		cmd.Stderr = os.Stderr // forward subprocess stderr for visibility (backward compatible)
+	}
 
 	// If custom env vars are provided, append them to the parent environment
 	if len(ec.config.Env) > 0 {
