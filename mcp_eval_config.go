@@ -27,6 +27,7 @@ type MaxSteps int
 type EvalConfig struct {
 	Model                string          `yaml:"model" json:"model" jsonschema:"Anthropic model ID to use for evaluations"`
 	GradingModel         string          `yaml:"grading_model,omitempty" json:"grading_model,omitempty" jsonschema:"Anthropic model ID to use for grading (defaults to same as model)"`
+	AgentSystemPrompt    string          `yaml:"agent_system_prompt,omitempty" json:"agent_system_prompt,omitempty" jsonschema:"Default system prompt for the agent being evaluated (can be overridden per-eval)"`
 	Timeout              string          `yaml:"timeout,omitempty" json:"timeout,omitempty" jsonschema:"Timeout duration for each evaluation (e.g., '2m', '30s')"`
 	MaxSteps             MaxSteps        `yaml:"max_steps,omitempty" json:"max_steps,omitempty" jsonschema:"Maximum number of agentic loop iterations"`
 	MaxTokens            MaxTokens       `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty" jsonschema:"Maximum tokens per LLM request"`

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	SystemPrompt = "You are an assistant responsible for evaluating the results of calling various tools. Given the user's query, use the tools available to you to answer the question."
+	AgentSystemPrompt = "You are an assistant responsible for evaluating the results of calling various tools. Given the user's query, use the tools available to you to answer the question."
 
 	EvalSystemPrompt = `You are an expert evaluator assessing how well an LLM answers a given question. Review the provided answer and score it from 1 to 5 in each of the following categories:
 
@@ -50,6 +50,7 @@ type EvalClientConfig struct {
 	Env                  []string
 	Model                string
 	GradingModel         string // Optional: if set, use this model for grading instead of Model
+	AgentSystemPrompt    string // Optional: custom system prompt for the agent being evaluated
 	MaxSteps             int
 	MaxTokens            int
 	EnablePromptCaching  *bool             // Optional: enable Anthropic prompt caching for tool definitions and system prompts. Default: true
@@ -292,8 +293,17 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 		}
 
 		// Build system prompt with optional cache control
+		// Precedence: per-eval > client config > default constant
+		promptText := AgentSystemPrompt
+		if ec.config.AgentSystemPrompt != "" {
+			promptText = ec.config.AgentSystemPrompt
+		}
+		if eval.AgentSystemPrompt != "" {
+			promptText = eval.AgentSystemPrompt
+		}
+
 		systemPrompt := anthropic.TextBlockParam{
-			Text: SystemPrompt,
+			Text: promptText,
 		}
 		if ec.config.EnablePromptCaching != nil && *ec.config.EnablePromptCaching {
 			systemPrompt.CacheControl = anthropic.NewCacheControlEphemeralParam()
@@ -671,11 +681,12 @@ type GradeResult struct {
 
 // Eval represents a single evaluation test case
 type Eval struct {
-	Name           string         `yaml:"name" json:"name" jsonschema:"Unique identifier for this evaluation"`
-	Description    string         `yaml:"description,omitempty" json:"description,omitempty" jsonschema:"Human-readable description of what this eval tests"`
-	Prompt         string         `yaml:"prompt" json:"prompt" jsonschema:"The input prompt to send to the LLM"`
-	ExpectedResult string         `yaml:"expected_result,omitempty" json:"expected_result,omitempty" jsonschema:"Expected behavior or result (used for documentation and grading context)"`
-	GradingRubric  *GradingRubric `yaml:"grading_rubric,omitempty" json:"grading_rubric,omitempty" jsonschema:"Optional custom grading criteria for this evaluation"`
+	Name              string         `yaml:"name" json:"name" jsonschema:"Unique identifier for this evaluation"`
+	Description       string         `yaml:"description,omitempty" json:"description,omitempty" jsonschema:"Human-readable description of what this eval tests"`
+	Prompt            string         `yaml:"prompt" json:"prompt" jsonschema:"The input prompt to send to the LLM"`
+	ExpectedResult    string         `yaml:"expected_result,omitempty" json:"expected_result,omitempty" jsonschema:"Expected behavior or result (used for documentation and grading context)"`
+	AgentSystemPrompt string         `yaml:"agent_system_prompt,omitempty" json:"agent_system_prompt,omitempty" jsonschema:"Optional custom system prompt for the agent (overrides global default)"`
+	GradingRubric     *GradingRubric `yaml:"grading_rubric,omitempty" json:"grading_rubric,omitempty" jsonschema:"Optional custom grading criteria for this evaluation"`
 }
 
 // GradingRubric defines specific evaluation criteria for grading
