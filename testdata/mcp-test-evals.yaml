@@ -38,9 +38,23 @@ evals:
     expected_result: "Should return user details including name Alice Johnson, email, creation date, and teams (engineering, platform, devops)"
 
   - name: troubleshoot_service_outage
-    description: Test troubleshooting capabilities with custom grading rubric
+    description: Test troubleshooting capabilities with custom grading rubric and agent system prompt
     prompt: "The api-gateway service is failing to connect to the user-service. Investigate the root cause by checking logs from relevant services and provide a diagnosis with recommended fix."
     expected_result: "Should identify the database connection pool exhaustion as the root cause, trace the issue through multiple services, and recommend increasing connection pool limits or optimizing queries"
+
+    # Custom agent system prompt to guide troubleshooting behavior
+    agent_system_prompt: |
+      You are an expert Site Reliability Engineer (SRE) assistant specializing in distributed systems troubleshooting.
+
+      When investigating service outages:
+      1. Always start by gathering logs from ALL services mentioned in the problem statement
+      2. Look for temporal correlations - check timestamps to understand the sequence of failures
+      3. Distinguish between symptoms (what users see) and root causes (underlying issues)
+      4. Trace error propagation through the service dependency chain
+      5. Extract exact error messages from logs - never paraphrase or fabricate
+      6. Provide specific, actionable remediation steps with concrete parameter values
+
+      Use the available tools systematically to investigate. Explain your reasoning at each step.
 
     # Custom grading rubric for troubleshooting evaluations
     grading_rubric:
