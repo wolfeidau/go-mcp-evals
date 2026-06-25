@@ -437,6 +437,85 @@ func TestRepairToolSearchBlocks_OutOfRange(t *testing.T) {
 	assert.Equal("hi", message.Content[0].Text)
 }
 
+// countMessageCacheBreakpoints reports how many content blocks across all
+// messages carry a cache_control breakpoint, and the index of the last message
+// that carries one (-1 if none).
+func countMessageCacheBreakpoints(messages []anthropic.MessageParam) (count, lastMsgIdx int) {
+	lastMsgIdx = -1
+	for i := range messages {
+		content := messages[i].Content
+		for j := range content {
+			block := content[j]
+			var set bool
+			switch {
+			case block.OfText != nil:
+				set = block.OfText.CacheControl.Type != ""
+			case block.OfToolResult != nil:
+				set = block.OfToolResult.CacheControl.Type != ""
+			case block.OfToolUse != nil:
+				set = block.OfToolUse.CacheControl.Type != ""
+			}
+			if set {
+				count++
+				lastMsgIdx = i
+			}
+		}
+	}
+	return count, lastMsgIdx
+}
+
+func TestApplyRollingCacheBreakpoint(t *testing.T) {
+	assert := require.New(t)
+
+	cc := anthropic.NewCacheControlEphemeralParam()
+
+	// Simulate an agentic loop that grows the message history each step, applying
+	// the rolling breakpoint before each request.
+	messages := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock("initial prompt")),
+	}
+
+	applyRollingCacheBreakpoint(messages, cc)
+	count, lastIdx := countMessageCacheBreakpoints(messages)
+	assert.Equal(1, count, "exactly one breakpoint after step 1")
+	assert.Equal(0, lastIdx, "breakpoint on the only message")
+
+	// Step 2: append an assistant turn and a user tool-result turn.
+	messages = append(messages,
+		anthropic.NewAssistantMessage(anthropic.NewTextBlock("calling a tool")),
+		anthropic.NewUserMessage(anthropic.NewToolResultBlock("tool_1", "result data", false)),
+	)
+	applyRollingCacheBreakpoint(messages, cc)
+	count, lastIdx = countMessageCacheBreakpoints(messages)
+	assert.Equal(1, count, "still exactly one breakpoint after step 2 (previous cleared)")
+	assert.Equal(len(messages)-1, lastIdx, "breakpoint moved to the latest message")
+
+	// Step 3: grow again; the single breakpoint should follow the tail.
+	messages = append(messages,
+		anthropic.NewAssistantMessage(anthropic.NewTextBlock("calling another tool")),
+		anthropic.NewUserMessage(anthropic.NewToolResultBlock("tool_2", "more data", false)),
+	)
+	applyRollingCacheBreakpoint(messages, cc)
+	count, lastIdx = countMessageCacheBreakpoints(messages)
+	assert.Equal(1, count, "still exactly one breakpoint after step 3")
+	assert.Equal(len(messages)-1, lastIdx, "breakpoint on the final tool-result message")
+
+	// The breakpoint must land on the last block of the last message.
+	last := messages[len(messages)-1]
+	tail := last.Content[len(last.Content)-1]
+	assert.NotNil(tail.OfToolResult)
+	assert.NotEmpty(string(tail.OfToolResult.CacheControl.Type))
+}
+
+func TestApplyRollingCacheBreakpoint_Empty(t *testing.T) {
+	assert := require.New(t)
+	// Must not panic on empty input or a message with no content blocks.
+	assert.NotPanics(func() {
+		applyRollingCacheBreakpoint(nil, anthropic.NewCacheControlEphemeralParam())
+		applyRollingCacheBreakpoint([]anthropic.MessageParam{{}}, anthropic.NewCacheControlEphemeralParam())
+	})
+}
+
 func TestEvalClient_loadMCPSession_CustomEnv(t *testing.T) {
 	assert := require.New(t)
 

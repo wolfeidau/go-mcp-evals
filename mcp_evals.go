@@ -349,6 +349,13 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 
 		systemPrompt := ec.buildAgentSystemPrompt(eval, serverInstructions)
 
+		// Maintain a rolling cache breakpoint on the most recent message so the
+		// growing conversation transcript (large tool results in particular) is
+		// served from cache on later steps instead of being re-sent at full price.
+		if ec.cachingEnabled() {
+			applyRollingCacheBreakpoint(messages, ec.newCacheControl())
+		}
+
 		stream := ec.client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
 			Model:     anthropic.Model(ec.config.Model),
 			MaxTokens: int64(ec.config.MaxTokens),
@@ -1038,6 +1045,55 @@ func (ec *EvalClient) newCacheControl() anthropic.CacheControlEphemeralParam {
 		cc.TTL = "1h"
 	}
 	return cc
+}
+
+// applyRollingCacheBreakpoint maintains a single cache breakpoint on the most
+// recent message so the conversation transcript is read from cache on later
+// agentic steps instead of being re-sent at full price.
+//
+// Anthropic allows at most four cache breakpoints per request and the system
+// prompt and tool definitions already consume two, so the previous message
+// breakpoint is cleared before the new one is set. Clearing the marker does not
+// evict the cache entry it created; that entry persists server-side by TTL and
+// is still read automatically via longest-prefix matching on the next request.
+func applyRollingCacheBreakpoint(messages []anthropic.MessageParam, cc anthropic.CacheControlEphemeralParam) {
+	var clear anthropic.CacheControlEphemeralParam
+	for i := range messages {
+		content := messages[i].Content
+		for j := range content {
+			setBlockCacheControl(&content[j], clear)
+		}
+	}
+
+	if len(messages) == 0 {
+		return
+	}
+	last := &messages[len(messages)-1]
+	if len(last.Content) == 0 {
+		return
+	}
+	setBlockCacheControl(&last.Content[len(last.Content)-1], cc)
+}
+
+// setBlockCacheControl sets the cache control on whichever variant of the
+// content block union is populated. Passing the zero value clears it (the field
+// marshals as omitzero). Variants that do not support cache control, such as
+// thinking blocks, are left untouched.
+func setBlockCacheControl(block *anthropic.ContentBlockParamUnion, cc anthropic.CacheControlEphemeralParam) {
+	switch {
+	case block.OfText != nil:
+		block.OfText.CacheControl = cc
+	case block.OfToolResult != nil:
+		block.OfToolResult.CacheControl = cc
+	case block.OfToolUse != nil:
+		block.OfToolUse.CacheControl = cc
+	case block.OfImage != nil:
+		block.OfImage.CacheControl = cc
+	case block.OfDocument != nil:
+		block.OfDocument.CacheControl = cc
+	case block.OfServerToolUse != nil:
+		block.OfServerToolUse.CacheControl = cc
+	}
 }
 
 // finalizeStep records the end time, duration, and appends the step to the trace.
