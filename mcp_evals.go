@@ -283,6 +283,31 @@ func extractToolSearches(message anthropic.Message) []ToolSearch {
 	return searches
 }
 
+// repairToolSearchBlocks restores tool_search_tool_result content blocks that
+// anthropic-sdk-go v1.52.0 corrupts during streaming accumulation.
+//
+// On each ContentBlockStopEvent the SDK re-marshals the accumulated block to
+// refresh its cached raw JSON, but that round-trip collapses the result block's
+// content union into an empty error variant ("type":"tool_search_tool_result_error"
+// with no error_code). Both trace extraction and message.ToParam() then read the
+// corrupted block, the latter producing a request the API rejects with
+// "tool_search_tool_result.content.RequestToolSearchToolResultError.error_code:
+// Field required". The block arrives intact in its content_block_start event, so
+// re-unmarshalling that captured payload by index reinstates the correct content.
+func repairToolSearchBlocks(message *anthropic.Message, raws map[int64]string) {
+	for idx, raw := range raws {
+		if idx < 0 || int(idx) >= len(message.Content) {
+			continue
+		}
+		if err := message.Content[idx].UnmarshalJSON([]byte(raw)); err != nil {
+			log.Warn().
+				Err(err).
+				Int64("index", idx).
+				Msg("Failed to restore tool_search_tool_result block; history round-trip may fail")
+		}
+	}
+}
+
 func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, error) {
 	overallStart := time.Now()
 	trace := &EvalTrace{
@@ -334,6 +359,12 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 
 		message := anthropic.Message{}
 
+		// tool_search_tool_result blocks arrive fully-formed in their
+		// content_block_start event and are not delta-streamed. Capture that
+		// intact payload by index so it can be restored after accumulation (see
+		// repairToolSearchBlocks for the SDK bug this works around).
+		toolSearchRaws := map[int64]string{}
+
 		// Process the stream
 		for stream.Next() {
 			event := stream.Current()
@@ -343,8 +374,13 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 				return nil, fmt.Errorf("failed to accumulate event: %w", err)
 			}
 
-			if evt, ok := event.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
+			switch evt := event.AsAny().(type) {
+			case anthropic.ContentBlockDeltaEvent:
 				finalText.WriteString(evt.Delta.Text)
+			case anthropic.ContentBlockStartEvent:
+				if evt.ContentBlock.Type == "tool_search_tool_result" {
+					toolSearchRaws[evt.Index] = evt.ContentBlock.RawJSON()
+				}
 			}
 		}
 
@@ -353,6 +389,10 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 			trace.Steps = append(trace.Steps, step)
 			return nil, fmt.Errorf("streaming error: %w", err)
 		}
+
+		// Restore tool-search result blocks mangled by streaming accumulation
+		// before they are read for tracing or echoed back into message history.
+		repairToolSearchBlocks(&message, toolSearchRaws)
 
 		// Record step data from message
 		step.StopReason = string(message.StopReason)

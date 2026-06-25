@@ -356,6 +356,87 @@ func TestExtractToolSearches(t *testing.T) {
 	}
 }
 
+// accumulateStream replays the given stream event JSON payloads into a Message
+// the same way RunEval does, capturing the intact content_block_start payload of
+// any tool_search_tool_result block by index so it can later be repaired.
+func accumulateStream(t *testing.T, events []string) (anthropic.Message, map[int64]string) {
+	t.Helper()
+	assert := require.New(t)
+
+	var message anthropic.Message
+	raws := map[int64]string{}
+	for _, raw := range events {
+		var ev anthropic.MessageStreamEventUnion
+		assert.NoError(json.Unmarshal([]byte(raw), &ev))
+		assert.NoError(message.Accumulate(ev))
+		if start, ok := ev.AsAny().(anthropic.ContentBlockStartEvent); ok {
+			if start.ContentBlock.Type == "tool_search_tool_result" {
+				raws[start.Index] = start.ContentBlock.RawJSON()
+			}
+		}
+	}
+	return message, raws
+}
+
+// TestRepairToolSearchBlocks reproduces the anthropic-sdk-go v1.52.0 streaming
+// bug where accumulation collapses a tool_search_tool_result block into an empty
+// error variant, then verifies that restoring the captured content_block_start
+// payload makes both trace extraction and the message.ToParam history round-trip
+// work again.
+func TestRepairToolSearchBlocks(t *testing.T) {
+	assert := require.New(t)
+
+	events := []string{
+		`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"tool_search_tool_bm25","caller":{"type":"direct"},"input":{"queries":["add"]}}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"content_block_start","index":1,"content_block":{"type":"tool_search_tool_result","tool_use_id":"srvtoolu_1","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"add"}]}}}`,
+		`{"type":"content_block_stop","index":1}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}`,
+		`{"type":"message_stop"}`,
+	}
+
+	message, raws := accumulateStream(t, events)
+
+	// Sanity check: streaming accumulation really does corrupt the block, so the
+	// test exercises the bug rather than a no-op. This is the exact payload the
+	// API rejects with "RequestToolSearchToolResultError.error_code: Field required".
+	before, err := json.Marshal(message.ToParam())
+	assert.NoError(err)
+	assert.Contains(string(before), "tool_search_tool_result_error")
+	assert.Len(raws, 1)
+
+	repairToolSearchBlocks(&message, raws)
+
+	// Trace extraction recovers the surfaced tool references.
+	searches := extractToolSearches(message)
+	assert.Len(searches, 1)
+	assert.Equal([]string{"add"}, searches[0].ToolsFound)
+	assert.Empty(searches[0].Error)
+
+	// The history round-trip now serializes the success variant the API accepts.
+	after, err := json.Marshal(message.ToParam())
+	assert.NoError(err)
+	assert.NotContains(string(after), "tool_search_tool_result_error")
+	assert.Contains(string(after), "tool_search_tool_search_result")
+	assert.Contains(string(after), `"tool_name":"add"`)
+}
+
+// TestRepairToolSearchBlocks_OutOfRange ensures stale or mismatched indexes are
+// ignored rather than panicking.
+func TestRepairToolSearchBlocks_OutOfRange(t *testing.T) {
+	assert := require.New(t)
+
+	var message anthropic.Message
+	assert.NoError(json.Unmarshal([]byte(`{"role":"assistant","content":[{"type":"text","text":"hi"}]}`), &message))
+
+	// Indexes outside the content slice must be skipped without panicking.
+	repairToolSearchBlocks(&message, map[int64]string{-1: "{}", 5: "{}"})
+
+	assert.Len(message.Content, 1)
+	assert.Equal("hi", message.Content[0].Text)
+}
+
 func TestEvalClient_loadMCPSession_CustomEnv(t *testing.T) {
 	assert := require.New(t)
 
