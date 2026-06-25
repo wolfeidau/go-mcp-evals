@@ -283,6 +283,58 @@ func extractToolSearches(message anthropic.Message) []ToolSearch {
 	return searches
 }
 
+// reconcileToolSearches merges tool-search records that are split across agentic
+// steps. A search emits its server_tool_use (which carries the query) and its
+// tool_search_tool_result (which carries the surfaced tools) in one response, but
+// the API can defer the result into the next step's response. That leaves two
+// half-records sharing a tool_use_id: the initiating step has the query with no
+// results, and the following step has the results with no query.
+//
+// The split records are merged by ID into the step that initiated the search
+// (the first occurrence, which holds the query) and the trailing duplicate is
+// dropped, so each search is recorded once and ToolSearchCount is not inflated.
+func reconcileToolSearches(steps []AgenticStep) {
+	// Pass 1: accumulate the most complete record for each tool-use ID.
+	merged := make(map[string]*ToolSearch)
+	for i := range steps {
+		for _, s := range steps[i].ToolSearches {
+			m, ok := merged[s.ToolUseID]
+			if !ok {
+				cp := s
+				merged[s.ToolUseID] = &cp
+				continue
+			}
+			if m.ToolName == "" {
+				m.ToolName = s.ToolName
+			}
+			if len(m.Query) == 0 {
+				m.Query = s.Query
+			}
+			if len(m.ToolsFound) == 0 {
+				m.ToolsFound = s.ToolsFound
+			}
+			if m.Error == "" {
+				m.Error = s.Error
+			}
+		}
+	}
+
+	// Pass 2: keep the first occurrence of each ID (now fully populated) and drop
+	// any later half-records for the same search.
+	seen := make(map[string]bool)
+	for i := range steps {
+		out := steps[i].ToolSearches[:0]
+		for _, s := range steps[i].ToolSearches {
+			if seen[s.ToolUseID] {
+				continue
+			}
+			seen[s.ToolUseID] = true
+			out = append(out, *merged[s.ToolUseID])
+		}
+		steps[i].ToolSearches = out
+	}
+}
+
 // repairToolSearchBlocks restores tool_search_tool_result content blocks that
 // anthropic-sdk-go v1.52.0 corrupts during streaming accumulation.
 //
@@ -477,6 +529,10 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 		// Add tool results to message history
 		messages = append(messages, anthropic.NewUserMessage(toolResults...))
 	}
+
+	// Merge tool-search records split across steps before counting, so a search
+	// whose result the API deferred into the next step is recorded once.
+	reconcileToolSearches(trace.Steps)
 
 	// Calculate trace metrics
 	trace.StepCount = len(trace.Steps)

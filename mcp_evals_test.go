@@ -437,6 +437,55 @@ func TestRepairToolSearchBlocks_OutOfRange(t *testing.T) {
 	assert.Equal("hi", message.Content[0].Text)
 }
 
+func TestReconcileToolSearches(t *testing.T) {
+	assert := require.New(t)
+
+	// Reproduces the observed split: the search initiated in step 1 (query, no
+	// results) has its result deferred into step 2 (results, no query), sharing a
+	// tool_use_id. A second, self-contained search lives entirely in step 1.
+	steps := []AgenticStep{
+		{
+			StepNumber: 1,
+			ToolSearches: []ToolSearch{
+				{ToolUseID: "srv_a", ToolName: "tool_search_tool_bm25", Query: json.RawMessage(`{"query":"complete"}`), ToolsFound: []string{"alpha"}},
+				{ToolUseID: "srv_b", ToolName: "tool_search_tool_bm25", Query: json.RawMessage(`{"query":"deferred"}`)},
+			},
+		},
+		{
+			StepNumber: 2,
+			ToolSearches: []ToolSearch{
+				{ToolUseID: "srv_b", ToolsFound: []string{"beta", "gamma"}},
+			},
+		},
+	}
+
+	reconcileToolSearches(steps)
+
+	// The self-contained search is untouched; the deferred search is merged into
+	// step 1 and removed from step 2.
+	assert.Len(steps[0].ToolSearches, 2)
+	assert.Empty(steps[1].ToolSearches, "trailing half-record should be dropped")
+
+	// Find the merged srv_b record in step 1.
+	var merged *ToolSearch
+	for i := range steps[0].ToolSearches {
+		if steps[0].ToolSearches[i].ToolUseID == "srv_b" {
+			merged = &steps[0].ToolSearches[i]
+		}
+	}
+	assert.NotNil(merged, "deferred search should be attributed to its initiating step")
+	assert.Equal("tool_search_tool_bm25", merged.ToolName, "name from the initiating half")
+	assert.JSONEq(`{"query":"deferred"}`, string(merged.Query), "query from the initiating half")
+	assert.Equal([]string{"beta", "gamma"}, merged.ToolsFound, "results from the trailing half")
+
+	// Counting now yields the distinct number of searches, not the inflated total.
+	total := 0
+	for i := range steps {
+		total += len(steps[i].ToolSearches)
+	}
+	assert.Equal(2, total, "two distinct searches, not three half-records")
+}
+
 // countMessageCacheBreakpoints reports how many content blocks across all
 // messages carry a cache_control breakpoint, and the index of the last message
 // that carries one (-1 if none).
