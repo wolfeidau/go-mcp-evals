@@ -226,17 +226,38 @@ func TestEvalClient_buildTools(t *testing.T) {
 				assert.Zero(deferredCount, "no MCP tool should be deferred")
 			}
 
-			// Cache control lands on the last tool in the array.
-			if len(tools) > 0 {
+			// Exactly one cache breakpoint should exist when caching is enabled,
+			// and it must land on the last tool in the array.
+			var cacheCount int
+			for i := range tools {
+				switch {
+				case tools[i].OfTool != nil && tools[i].OfTool.CacheControl.Type != "":
+					cacheCount++
+				case tools[i].OfToolSearchToolBm25_20251119 != nil && tools[i].OfToolSearchToolBm25_20251119.CacheControl.Type != "":
+					cacheCount++
+				}
+			}
+			if tt.wantCacheControl {
+				assert.Equal(1, cacheCount, "exactly one cache breakpoint expected")
+
 				last := tools[len(tools)-1]
-				var cacheSet bool
+				var lastCacheSet bool
 				switch {
 				case last.OfTool != nil:
-					cacheSet = last.OfTool.CacheControl.Type != ""
+					lastCacheSet = last.OfTool.CacheControl.Type != ""
 				case last.OfToolSearchToolBm25_20251119 != nil:
-					cacheSet = last.OfToolSearchToolBm25_20251119.CacheControl.Type != ""
+					lastCacheSet = last.OfToolSearchToolBm25_20251119.CacheControl.Type != ""
 				}
-				assert.Equal(tt.wantCacheControl, cacheSet)
+				assert.True(lastCacheSet, "cache control should land on the last tool")
+
+				// When tool search is on, the last tool is the search tool, so the
+				// breakpoint must sit on the search tool rather than an MCP tool.
+				if tt.wantSearchTool {
+					assert.NotNil(last.OfToolSearchToolBm25_20251119, "breakpoint should be on the search tool")
+					assert.NotEmpty(string(last.OfToolSearchToolBm25_20251119.CacheControl.Type))
+				}
+			} else {
+				assert.Zero(cacheCount, "no cache breakpoint expected")
 			}
 
 			// Verify the serialized wire shape matches expectations.

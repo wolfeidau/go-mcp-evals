@@ -382,6 +382,15 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 			break
 		}
 
+		// pause_turn signals a long-running server-side tool (e.g. tool search)
+		// paused the turn. The assistant message is already in history, so
+		// continue the loop to let the model resume rather than terminating the
+		// eval early. The MaxSteps bound still guards against an unbounded loop.
+		if message.StopReason == anthropic.StopReasonPauseTurn {
+			finalizeStep(&step, trace)
+			continue
+		}
+
 		if message.StopReason != anthropic.StopReasonToolUse {
 			finalizeStep(&step, trace)
 			break
