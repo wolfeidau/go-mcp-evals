@@ -250,6 +250,91 @@ func TestEvalClient_buildTools(t *testing.T) {
 	}
 }
 
+func TestExtractToolSearches(t *testing.T) {
+	tests := []struct {
+		name        string
+		content     string // JSON array of content blocks for the assistant message
+		wantSearch  []ToolSearch
+		wantNilZero bool // expect no searches returned
+	}{
+		{
+			name: "successful search records query and tools found",
+			content: `[
+				{"type":"text","text":"Let me find a tool."},
+				{"type":"server_tool_use","id":"srvtoolu_1","name":"tool_search_tool_bm25","caller":{"type":"direct"},"input":{"queries":["add two numbers"]}},
+				{"type":"tool_search_tool_result","tool_use_id":"srvtoolu_1","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"add"},{"type":"tool_reference","tool_name":"sum"}]}}
+			]`,
+			wantSearch: []ToolSearch{{
+				ToolUseID:  "srvtoolu_1",
+				ToolName:   "tool_search_tool_bm25",
+				Query:      json.RawMessage(`{"queries":["add two numbers"]}`),
+				ToolsFound: []string{"add", "sum"},
+			}},
+		},
+		{
+			name: "failed search records error",
+			content: `[
+				{"type":"server_tool_use","id":"srvtoolu_2","name":"tool_search_tool_bm25","caller":{"type":"direct"},"input":{"queries":["x"]}},
+				{"type":"tool_search_tool_result","tool_use_id":"srvtoolu_2","content":{"type":"tool_search_tool_result_error","error_code":"unavailable","error_message":"search backend down"}}
+			]`,
+			wantSearch: []ToolSearch{{
+				ToolUseID: "srvtoolu_2",
+				ToolName:  "tool_search_tool_bm25",
+				Query:     json.RawMessage(`{"queries":["x"]}`),
+				Error:     "unavailable: search backend down",
+			}},
+		},
+		{
+			name: "message without tool search returns nothing",
+			content: `[
+				{"type":"text","text":"hello"},
+				{"type":"tool_use","id":"toolu_9","name":"add","input":{"a":1,"b":2}}
+			]`,
+			wantNilZero: true,
+		},
+		{
+			name: "multiple searches preserve order",
+			content: `[
+				{"type":"server_tool_use","id":"srvtoolu_a","name":"tool_search_tool_bm25","caller":{"type":"direct"},"input":{"queries":["first"]}},
+				{"type":"tool_search_tool_result","tool_use_id":"srvtoolu_a","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"alpha"}]}},
+				{"type":"server_tool_use","id":"srvtoolu_b","name":"tool_search_tool_bm25","caller":{"type":"direct"},"input":{"queries":["second"]}},
+				{"type":"tool_search_tool_result","tool_use_id":"srvtoolu_b","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"beta"}]}}
+			]`,
+			wantSearch: []ToolSearch{
+				{ToolUseID: "srvtoolu_a", ToolName: "tool_search_tool_bm25", Query: json.RawMessage(`{"queries":["first"]}`), ToolsFound: []string{"alpha"}},
+				{ToolUseID: "srvtoolu_b", ToolName: "tool_search_tool_bm25", Query: json.RawMessage(`{"queries":["second"]}`), ToolsFound: []string{"beta"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert := require.New(t)
+
+			var message anthropic.Message
+			err := json.Unmarshal([]byte(`{"content":`+tt.content+`}`), &message)
+			assert.NoError(err)
+
+			searches := extractToolSearches(message)
+
+			if tt.wantNilZero {
+				assert.Empty(searches)
+				return
+			}
+
+			assert.Len(searches, len(tt.wantSearch))
+			for i, want := range tt.wantSearch {
+				got := searches[i]
+				assert.Equal(want.ToolUseID, got.ToolUseID)
+				assert.Equal(want.ToolName, got.ToolName)
+				assert.Equal(want.ToolsFound, got.ToolsFound)
+				assert.Equal(want.Error, got.Error)
+				assert.JSONEq(string(want.Query), string(got.Query))
+			}
+		})
+	}
+}
+
 func TestEvalClient_loadMCPSession_CustomEnv(t *testing.T) {
 	assert := require.New(t)
 

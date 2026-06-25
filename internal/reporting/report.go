@@ -156,6 +156,7 @@ func captureOverallStats(results []evaluations.EvalRunResult, styles help.Styles
 	totalOutputTokens := 0
 	totalToolCalls := 0
 	successfulToolCalls := 0
+	totalToolSearches := 0
 	totalCacheCreationTokens := 0
 	totalCacheReadTokens := 0
 
@@ -170,6 +171,7 @@ func captureOverallStats(results []evaluations.EvalRunResult, styles help.Styles
 			totalInputTokens += result.Trace.TotalInputTokens
 			totalOutputTokens += result.Trace.TotalOutputTokens
 			totalToolCalls += result.Trace.ToolCallCount
+			totalToolSearches += result.Trace.ToolSearchCount
 			totalCacheCreationTokens += result.Trace.TotalCacheCreationTokens
 			totalCacheReadTokens += result.Trace.TotalCacheReadTokens
 
@@ -242,23 +244,29 @@ func captureOverallStats(results []evaluations.EvalRunResult, styles help.Styles
 	}
 
 	// Tool execution stats
-	if totalToolCalls > 0 {
+	if totalToolCalls > 0 || totalToolSearches > 0 {
 		output.WriteString(h3(styles, "Tool Execution"))
 		fmt.Fprintf(&output, "Total Tool Calls:   %d\n", totalToolCalls)
 
-		successRateOverall := float64(successfulToolCalls) / float64(totalToolCalls) * 100
-		successRateStr := fmt.Sprintf("%.0f%% (%d/%d)", successRateOverall, successfulToolCalls, totalToolCalls)
-		if successRateOverall >= 80 {
-			successRateStr = styles.Success.Render(successRateStr)
-		} else if successRateOverall < 50 {
-			successRateStr = styles.Error.Render(successRateStr)
+		if totalToolSearches > 0 {
+			fmt.Fprintf(&output, "Tool Searches:      %d\n", totalToolSearches)
 		}
-		fmt.Fprintf(&output, "Success Rate:       %s\n", successRateStr)
 
-		if totalToolCalls > successfulToolCalls {
-			failedCalls := totalToolCalls - successfulToolCalls
-			fmt.Fprintf(&output, "Failed Calls:       %s\n",
-				styles.Error.Render(fmt.Sprintf("%d", failedCalls)))
+		if totalToolCalls > 0 {
+			successRateOverall := float64(successfulToolCalls) / float64(totalToolCalls) * 100
+			successRateStr := fmt.Sprintf("%.0f%% (%d/%d)", successRateOverall, successfulToolCalls, totalToolCalls)
+			if successRateOverall >= 80 {
+				successRateStr = styles.Success.Render(successRateStr)
+			} else if successRateOverall < 50 {
+				successRateStr = styles.Error.Render(successRateStr)
+			}
+			fmt.Fprintf(&output, "Success Rate:       %s\n", successRateStr)
+
+			if totalToolCalls > successfulToolCalls {
+				failedCalls := totalToolCalls - successfulToolCalls
+				fmt.Fprintf(&output, "Failed Calls:       %s\n",
+					styles.Error.Render(fmt.Sprintf("%d", failedCalls)))
+			}
 		}
 		output.WriteString("\n")
 	}
@@ -390,6 +398,24 @@ func captureEvalDetail(result evaluations.EvalRunResult, styles help.Styles) str
 					if tool.Error != "" {
 						fmt.Fprintf(&output, "    Error: %s\n", tool.Error)
 					}
+				}
+			}
+
+			// Show server-side tool searches
+			for _, search := range step.ToolSearches {
+				fmt.Fprintf(&output, "  Tool Search: %s\n", search.ToolName)
+				if len(search.Query) > 0 {
+					fmt.Fprintf(&output, "    Query: %s\n", string(search.Query))
+				}
+				if search.Error != "" {
+					fmt.Fprintf(&output, "    %s %s\n",
+						styles.Error.Render("✗ Failed"),
+						search.Error)
+				} else {
+					fmt.Fprintf(&output, "    %s found %d tool(s): %s\n",
+						styles.Success.Render("✓"),
+						len(search.ToolsFound),
+						strings.Join(search.ToolsFound, ", "))
 				}
 			}
 

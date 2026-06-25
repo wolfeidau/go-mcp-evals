@@ -226,6 +226,63 @@ func (ec *EvalClient) executeAndTraceToolCall(
 	return toolCall
 }
 
+// extractToolSearches pulls server-side tool-search activity out of an assistant
+// message. The model's search calls arrive as server_tool_use blocks and their
+// results as tool_search_tool_result blocks; both are paired by tool-use ID so
+// the trace records what was searched and which tool schemas were surfaced. This
+// is the only place tool-search activity is captured, because the search runs
+// server-side and never round-trips through executeAndTraceToolCall.
+func extractToolSearches(message anthropic.Message) []ToolSearch {
+	byID := make(map[string]*ToolSearch)
+	order := make([]string, 0)
+	get := func(id string) *ToolSearch {
+		ts, ok := byID[id]
+		if !ok {
+			ts = &ToolSearch{ToolUseID: id}
+			byID[id] = ts
+			order = append(order, id)
+		}
+		return ts
+	}
+
+	for _, block := range message.Content {
+		switch b := block.AsAny().(type) {
+		case anthropic.ServerToolUseBlock:
+			// Only the tool-search server tools are relevant here; other server
+			// tools (web search, code execution) are not used by this client.
+			if !strings.HasPrefix(string(b.Name), "tool_search_tool") {
+				continue
+			}
+			ts := get(b.ID)
+			ts.ToolName = string(b.Name)
+			if input, err := json.Marshal(b.Input); err == nil {
+				ts.Query = input
+			}
+		case anthropic.ToolSearchToolResultBlock:
+			ts := get(b.ToolUseID)
+			content := b.Content
+			if content.ErrorCode != "" {
+				ts.Error = string(content.ErrorCode)
+				if content.ErrorMessage != "" {
+					ts.Error = fmt.Sprintf("%s: %s", content.ErrorCode, content.ErrorMessage)
+				}
+			}
+			for _, ref := range content.ToolReferences {
+				ts.ToolsFound = append(ts.ToolsFound, ref.ToolName)
+			}
+		}
+	}
+
+	if len(order) == 0 {
+		return nil
+	}
+	searches := make([]ToolSearch, 0, len(order))
+	for _, id := range order {
+		searches = append(searches, *byID[id])
+	}
+	return searches
+}
+
 func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, error) {
 	overallStart := time.Now()
 	trace := &EvalTrace{
@@ -313,6 +370,9 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 			}
 		}
 
+		// Capture any server-side tool searches the model performed this step.
+		step.ToolSearches = extractToolSearches(message)
+
 		// Add assistant message to history
 		messages = append(messages, message.ToParam())
 
@@ -368,6 +428,7 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 		trace.TotalInputTokens += step.InputTokens
 		trace.TotalOutputTokens += step.OutputTokens
 		trace.ToolCallCount += len(step.ToolCalls)
+		trace.ToolSearchCount += len(step.ToolSearches)
 
 		// Aggregate cache metrics
 		trace.TotalCacheCreationTokens += step.CacheCreationInputTokens
@@ -840,6 +901,7 @@ type EvalTrace struct {
 	TotalOutputTokens        int           `json:"total_output_tokens"`           // Sum of output tokens across all steps
 	StepCount                int           `json:"step_count"`                    // Number of agentic steps executed
 	ToolCallCount            int           `json:"tool_call_count"`               // Total number of tool calls made
+	ToolSearchCount          int           `json:"tool_search_count"`             // Total number of server-side tool searches performed
 	TotalCacheCreationTokens int           `json:"total_cache_creation_tokens"`   // Sum of cache creation tokens across all steps
 	TotalCacheReadTokens     int           `json:"total_cache_read_tokens"`       // Sum of cache read tokens across all steps
 }
@@ -853,6 +915,7 @@ type AgenticStep struct {
 	ModelResponse            string        `json:"model_response"`              // Text content from assistant
 	StopReason               string        `json:"stop_reason"`                 // end_turn, tool_use, max_tokens, etc.
 	ToolCalls                []ToolCall    `json:"tool_calls"`                  // Tools executed in this step
+	ToolSearches             []ToolSearch  `json:"tool_searches,omitempty"`     // Server-side tool searches performed in this step
 	InputTokens              int           `json:"input_tokens"`                // Input tokens for this step
 	OutputTokens             int           `json:"output_tokens"`               // Output tokens for this step
 	CacheCreationInputTokens int           `json:"cache_creation_input_tokens"` // Tokens used to create cache
@@ -871,6 +934,19 @@ type ToolCall struct {
 	Output    json.RawMessage `json:"output"`          // Tool result as JSON
 	Success   bool            `json:"success"`         // Whether tool executed successfully
 	Error     string          `json:"error,omitempty"` // Error message if tool failed
+}
+
+// ToolSearch captures a single server-side tool-search invocation and the tool
+// schemas it surfaced. When tool search is enabled the model calls the BM25
+// search tool and Anthropic executes it inline, so these never pass through
+// executeAndTraceToolCall; they are extracted from the response content blocks
+// purely for observability.
+type ToolSearch struct {
+	ToolUseID  string          `json:"tool_use_id"`           // ID linking the server_tool_use call to its result block
+	ToolName   string          `json:"tool_name"`             // Search tool name, e.g. "tool_search_tool_bm25"
+	Query      json.RawMessage `json:"query,omitempty"`       // Search input (queries) as JSON
+	ToolsFound []string        `json:"tools_found,omitempty"` // Tool names surfaced by the search
+	Error      string          `json:"error,omitempty"`       // Error message if the search failed
 }
 
 // GradingTrace records the grading interaction with the LLM
