@@ -55,6 +55,7 @@ type EvalClientConfig struct {
 	MaxTokens            int
 	EnablePromptCaching  *bool             // Optional: enable Anthropic prompt caching for tool definitions and system prompts. Default: true
 	CacheTTL             string            // Optional: cache time-to-live, either "5m" (default) or "1h". Requires EnablePromptCaching=true
+	EnableToolSearch     *bool             // Optional: enable tool search (defer MCP tool schemas and add a BM25 tool-search tool). Default: true
 	EnforceMinimumScores *bool             // Optional: enforce minimum scores from grading rubrics. Default: true
 	StderrCallback       func(line string) // Optional: called for each line written to stderr by the MCP server subprocess
 }
@@ -76,6 +77,9 @@ func (c *EvalClientConfig) ApplyDefaults() *EvalClientConfig {
 	}
 	if c.EnforceMinimumScores == nil {
 		c.EnforceMinimumScores = toPtr(true) // Enable minimum score enforcement by default
+	}
+	if c.EnableToolSearch == nil {
+		c.EnableToolSearch = toPtr(true) // Enable tool search by default to keep the initial prompt small
 	}
 	return c
 }
@@ -222,6 +226,88 @@ func (ec *EvalClient) executeAndTraceToolCall(
 	return toolCall
 }
 
+// extractToolSearches pulls server-side tool-search activity out of an assistant
+// message. The model's search calls arrive as server_tool_use blocks and their
+// results as tool_search_tool_result blocks; both are paired by tool-use ID so
+// the trace records what was searched and which tool schemas were surfaced. This
+// is the only place tool-search activity is captured, because the search runs
+// server-side and never round-trips through executeAndTraceToolCall.
+func extractToolSearches(message anthropic.Message) []ToolSearch {
+	byID := make(map[string]*ToolSearch)
+	order := make([]string, 0)
+	get := func(id string) *ToolSearch {
+		ts, ok := byID[id]
+		if !ok {
+			ts = &ToolSearch{ToolUseID: id}
+			byID[id] = ts
+			order = append(order, id)
+		}
+		return ts
+	}
+
+	for _, block := range message.Content {
+		switch b := block.AsAny().(type) {
+		case anthropic.ServerToolUseBlock:
+			// Only the tool-search server tools are relevant here; other server
+			// tools (web search, code execution) are not used by this client.
+			if !strings.HasPrefix(string(b.Name), "tool_search_tool") {
+				continue
+			}
+			ts := get(b.ID)
+			ts.ToolName = string(b.Name)
+			if input, err := json.Marshal(b.Input); err == nil {
+				ts.Query = input
+			}
+		case anthropic.ToolSearchToolResultBlock:
+			ts := get(b.ToolUseID)
+			content := b.Content
+			if content.ErrorCode != "" {
+				ts.Error = string(content.ErrorCode)
+				if content.ErrorMessage != "" {
+					ts.Error = fmt.Sprintf("%s: %s", content.ErrorCode, content.ErrorMessage)
+				}
+			}
+			for _, ref := range content.ToolReferences {
+				ts.ToolsFound = append(ts.ToolsFound, ref.ToolName)
+			}
+		}
+	}
+
+	if len(order) == 0 {
+		return nil
+	}
+	searches := make([]ToolSearch, 0, len(order))
+	for _, id := range order {
+		searches = append(searches, *byID[id])
+	}
+	return searches
+}
+
+// repairToolSearchBlocks restores tool_search_tool_result content blocks that
+// anthropic-sdk-go v1.52.0 corrupts during streaming accumulation.
+//
+// On each ContentBlockStopEvent the SDK re-marshals the accumulated block to
+// refresh its cached raw JSON, but that round-trip collapses the result block's
+// content union into an empty error variant ("type":"tool_search_tool_result_error"
+// with no error_code). Both trace extraction and message.ToParam() then read the
+// corrupted block, the latter producing a request the API rejects with
+// "tool_search_tool_result.content.RequestToolSearchToolResultError.error_code:
+// Field required". The block arrives intact in its content_block_start event, so
+// re-unmarshalling that captured payload by index reinstates the correct content.
+func repairToolSearchBlocks(message *anthropic.Message, raws map[int64]string) {
+	for idx, raw := range raws {
+		if idx < 0 || int(idx) >= len(message.Content) {
+			continue
+		}
+		if err := message.Content[idx].UnmarshalJSON([]byte(raw)); err != nil {
+			log.Warn().
+				Err(err).
+				Int64("index", idx).
+				Msg("Failed to restore tool_search_tool_result block; history round-trip may fail")
+		}
+	}
+}
+
 func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, error) {
 	overallStart := time.Now()
 	trace := &EvalTrace{
@@ -241,42 +327,7 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 	trace.ServerInstructions = serverInstructions
 
 	// convert the tools to the format expected by the anthropic model
-	toolParams := make([]anthropic.ToolParam, 0, len(toolsResp.Tools))
-	for _, tool := range toolsResp.Tools {
-		// Convert the MCP tool input schema to Anthropic format
-		var properties map[string]any
-		if tool.InputSchema != nil {
-			// MCP uses JSON Schema, convert to map
-			schemaBytes, _ := json.Marshal(tool.InputSchema)
-			var schema map[string]any
-			if err := json.Unmarshal(schemaBytes, &schema); err == nil {
-				if props, ok := schema["properties"].(map[string]any); ok {
-					properties = props
-				}
-			}
-		}
-
-		toolParam := anthropic.ToolParam{
-			Name:        tool.Name,
-			Description: anthropic.String(tool.Description),
-			InputSchema: anthropic.ToolInputSchemaParam{
-				Properties: properties,
-			},
-		}
-		toolParams = append(toolParams, toolParam)
-	}
-
-	// Add cache control to the last tool definition if caching is enabled
-	// This creates a cache breakpoint after all tools, maximizing cache reuse
-	if ec.cachingEnabled() && len(toolParams) > 0 {
-		lastIdx := len(toolParams) - 1
-		toolParams[lastIdx].CacheControl = ec.newCacheControl()
-	}
-
-	tools := make([]anthropic.ToolUnionParam, len(toolParams))
-	for i, toolParam := range toolParams {
-		tools[i] = anthropic.ToolUnionParam{OfTool: &toolParam}
-	}
+	tools := ec.buildTools(toolsResp.Tools)
 
 	// Initialize message history
 	messages := []anthropic.MessageParam{
@@ -298,6 +349,13 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 
 		systemPrompt := ec.buildAgentSystemPrompt(eval, serverInstructions)
 
+		// Maintain a rolling cache breakpoint on the most recent message so the
+		// growing conversation transcript (large tool results in particular) is
+		// served from cache on later steps instead of being re-sent at full price.
+		if ec.cachingEnabled() {
+			applyRollingCacheBreakpoint(messages, ec.newCacheControl())
+		}
+
 		stream := ec.client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
 			Model:     anthropic.Model(ec.config.Model),
 			MaxTokens: int64(ec.config.MaxTokens),
@@ -308,6 +366,12 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 
 		message := anthropic.Message{}
 
+		// tool_search_tool_result blocks arrive fully-formed in their
+		// content_block_start event and are not delta-streamed. Capture that
+		// intact payload by index so it can be restored after accumulation (see
+		// repairToolSearchBlocks for the SDK bug this works around).
+		toolSearchRaws := map[int64]string{}
+
 		// Process the stream
 		for stream.Next() {
 			event := stream.Current()
@@ -317,8 +381,13 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 				return nil, fmt.Errorf("failed to accumulate event: %w", err)
 			}
 
-			if evt, ok := event.AsAny().(anthropic.ContentBlockDeltaEvent); ok {
+			switch evt := event.AsAny().(type) {
+			case anthropic.ContentBlockDeltaEvent:
 				finalText.WriteString(evt.Delta.Text)
+			case anthropic.ContentBlockStartEvent:
+				if evt.ContentBlock.Type == "tool_search_tool_result" {
+					toolSearchRaws[evt.Index] = evt.ContentBlock.RawJSON()
+				}
 			}
 		}
 
@@ -327,6 +396,10 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 			trace.Steps = append(trace.Steps, step)
 			return nil, fmt.Errorf("streaming error: %w", err)
 		}
+
+		// Restore tool-search result blocks mangled by streaming accumulation
+		// before they are read for tracing or echoed back into message history.
+		repairToolSearchBlocks(&message, toolSearchRaws)
 
 		// Record step data from message
 		step.StopReason = string(message.StopReason)
@@ -344,6 +417,9 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 			}
 		}
 
+		// Capture any server-side tool searches the model performed this step.
+		step.ToolSearches = extractToolSearches(message)
+
 		// Add assistant message to history
 		messages = append(messages, message.ToParam())
 
@@ -351,6 +427,15 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 		if message.StopReason == anthropic.StopReasonEndTurn {
 			finalizeStep(&step, trace)
 			break
+		}
+
+		// pause_turn signals a long-running server-side tool (e.g. tool search)
+		// paused the turn. The assistant message is already in history, so
+		// continue the loop to let the model resume rather than terminating the
+		// eval early. The MaxSteps bound still guards against an unbounded loop.
+		if message.StopReason == anthropic.StopReasonPauseTurn {
+			finalizeStep(&step, trace)
+			continue
 		}
 
 		if message.StopReason != anthropic.StopReasonToolUse {
@@ -399,6 +484,7 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 		trace.TotalInputTokens += step.InputTokens
 		trace.TotalOutputTokens += step.OutputTokens
 		trace.ToolCallCount += len(step.ToolCalls)
+		trace.ToolSearchCount += len(step.ToolSearches)
 
 		// Aggregate cache metrics
 		trace.TotalCacheCreationTokens += step.CacheCreationInputTokens
@@ -443,6 +529,75 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 	trace.TotalDuration = time.Since(overallStart)
 
 	return result, nil
+}
+
+// buildTools converts MCP tools into the tool definitions sent to the model.
+//
+// When tool search is enabled, the MCP tool schemas are marked defer_loading so
+// they are not included in the initial prompt; a non-deferred BM25 tool-search
+// tool is appended so Claude can discover and load only the relevant schemas on
+// demand. When tool search is disabled, every MCP tool is sent eagerly, matching
+// the previous behaviour.
+func (ec *EvalClient) buildTools(mcpTools []*mcp.Tool) []anthropic.ToolUnionParam {
+	toolParams := make([]anthropic.ToolParam, 0, len(mcpTools))
+	for _, tool := range mcpTools {
+		// Convert the MCP tool input schema to Anthropic format
+		var properties map[string]any
+		if tool.InputSchema != nil {
+			// MCP uses JSON Schema, convert to map
+			schemaBytes, _ := json.Marshal(tool.InputSchema)
+			var schema map[string]any
+			if err := json.Unmarshal(schemaBytes, &schema); err == nil {
+				if props, ok := schema["properties"].(map[string]any); ok {
+					properties = props
+				}
+			}
+		}
+
+		toolParams = append(toolParams, anthropic.ToolParam{
+			Name:        tool.Name,
+			Description: anthropic.String(tool.Description),
+			InputSchema: anthropic.ToolInputSchemaParam{
+				Properties: properties,
+			},
+		})
+	}
+
+	// Defer the MCP tool schemas when tool search is enabled. At least one tool
+	// must remain non-deferred (the search tool, appended below), so this only
+	// applies when there are MCP tools to defer.
+	useToolSearch := ec.toolSearchEnabled() && len(toolParams) > 0
+	if useToolSearch {
+		for i := range toolParams {
+			toolParams[i].DeferLoading = anthropic.Bool(true)
+		}
+	}
+
+	tools := make([]anthropic.ToolUnionParam, 0, len(toolParams)+1)
+	for i := range toolParams {
+		tools = append(tools, anthropic.ToolUnionParam{OfTool: &toolParams[i]})
+	}
+
+	if useToolSearch {
+		tools = append(tools, anthropic.ToolUnionParamOfToolSearchToolBm25_20251119(
+			anthropic.ToolSearchToolBm25_20251119TypeToolSearchToolBm25_20251119,
+		))
+	}
+
+	// Place a single cache breakpoint after all tool definitions, on the last
+	// tool in the array (the search tool when tool search is on, otherwise the
+	// last MCP tool), maximizing cache reuse across steps.
+	if ec.cachingEnabled() && len(tools) > 0 {
+		last := &tools[len(tools)-1]
+		switch {
+		case last.OfTool != nil:
+			last.OfTool.CacheControl = ec.newCacheControl()
+		case last.OfToolSearchToolBm25_20251119 != nil:
+			last.OfToolSearchToolBm25_20251119.CacheControl = ec.newCacheControl()
+		}
+	}
+
+	return tools
 }
 
 func (ec *EvalClient) buildAgentSystemPrompt(eval Eval, serverInstructions string) []anthropic.TextBlockParam {
@@ -802,6 +957,7 @@ type EvalTrace struct {
 	TotalOutputTokens        int           `json:"total_output_tokens"`           // Sum of output tokens across all steps
 	StepCount                int           `json:"step_count"`                    // Number of agentic steps executed
 	ToolCallCount            int           `json:"tool_call_count"`               // Total number of tool calls made
+	ToolSearchCount          int           `json:"tool_search_count"`             // Total number of server-side tool searches performed
 	TotalCacheCreationTokens int           `json:"total_cache_creation_tokens"`   // Sum of cache creation tokens across all steps
 	TotalCacheReadTokens     int           `json:"total_cache_read_tokens"`       // Sum of cache read tokens across all steps
 }
@@ -815,6 +971,7 @@ type AgenticStep struct {
 	ModelResponse            string        `json:"model_response"`              // Text content from assistant
 	StopReason               string        `json:"stop_reason"`                 // end_turn, tool_use, max_tokens, etc.
 	ToolCalls                []ToolCall    `json:"tool_calls"`                  // Tools executed in this step
+	ToolSearches             []ToolSearch  `json:"tool_searches,omitempty"`     // Server-side tool searches performed in this step
 	InputTokens              int           `json:"input_tokens"`                // Input tokens for this step
 	OutputTokens             int           `json:"output_tokens"`               // Output tokens for this step
 	CacheCreationInputTokens int           `json:"cache_creation_input_tokens"` // Tokens used to create cache
@@ -833,6 +990,19 @@ type ToolCall struct {
 	Output    json.RawMessage `json:"output"`          // Tool result as JSON
 	Success   bool            `json:"success"`         // Whether tool executed successfully
 	Error     string          `json:"error,omitempty"` // Error message if tool failed
+}
+
+// ToolSearch captures a single server-side tool-search invocation and the tool
+// schemas it surfaced. When tool search is enabled the model calls the BM25
+// search tool and Anthropic executes it inline, so these never pass through
+// executeAndTraceToolCall; they are extracted from the response content blocks
+// purely for observability.
+type ToolSearch struct {
+	ToolUseID  string          `json:"tool_use_id"`           // ID linking the server_tool_use call to its result block
+	ToolName   string          `json:"tool_name"`             // Search tool name, e.g. "tool_search_tool_bm25"
+	Query      json.RawMessage `json:"query,omitempty"`       // Search input (queries) as JSON
+	ToolsFound []string        `json:"tools_found,omitempty"` // Tool names surfaced by the search
+	Error      string          `json:"error,omitempty"`       // Error message if the search failed
 }
 
 // GradingTrace records the grading interaction with the LLM
@@ -863,6 +1033,11 @@ func (ec *EvalClient) cachingEnabled() bool {
 	return ec.config.EnablePromptCaching != nil && *ec.config.EnablePromptCaching
 }
 
+// toolSearchEnabled returns true if tool search is enabled in the config.
+func (ec *EvalClient) toolSearchEnabled() bool {
+	return ec.config.EnableToolSearch != nil && *ec.config.EnableToolSearch
+}
+
 // newCacheControl builds an ephemeral cache control param with the configured TTL.
 func (ec *EvalClient) newCacheControl() anthropic.CacheControlEphemeralParam {
 	cc := anthropic.NewCacheControlEphemeralParam()
@@ -870,6 +1045,55 @@ func (ec *EvalClient) newCacheControl() anthropic.CacheControlEphemeralParam {
 		cc.TTL = "1h"
 	}
 	return cc
+}
+
+// applyRollingCacheBreakpoint maintains a single cache breakpoint on the most
+// recent message so the conversation transcript is read from cache on later
+// agentic steps instead of being re-sent at full price.
+//
+// Anthropic allows at most four cache breakpoints per request and the system
+// prompt and tool definitions already consume two, so the previous message
+// breakpoint is cleared before the new one is set. Clearing the marker does not
+// evict the cache entry it created; that entry persists server-side by TTL and
+// is still read automatically via longest-prefix matching on the next request.
+func applyRollingCacheBreakpoint(messages []anthropic.MessageParam, cc anthropic.CacheControlEphemeralParam) {
+	var clear anthropic.CacheControlEphemeralParam
+	for i := range messages {
+		content := messages[i].Content
+		for j := range content {
+			setBlockCacheControl(&content[j], clear)
+		}
+	}
+
+	if len(messages) == 0 {
+		return
+	}
+	last := &messages[len(messages)-1]
+	if len(last.Content) == 0 {
+		return
+	}
+	setBlockCacheControl(&last.Content[len(last.Content)-1], cc)
+}
+
+// setBlockCacheControl sets the cache control on whichever variant of the
+// content block union is populated. Passing the zero value clears it (the field
+// marshals as omitzero). Variants that do not support cache control, such as
+// thinking blocks, are left untouched.
+func setBlockCacheControl(block *anthropic.ContentBlockParamUnion, cc anthropic.CacheControlEphemeralParam) {
+	switch {
+	case block.OfText != nil:
+		block.OfText.CacheControl = cc
+	case block.OfToolResult != nil:
+		block.OfToolResult.CacheControl = cc
+	case block.OfToolUse != nil:
+		block.OfToolUse.CacheControl = cc
+	case block.OfImage != nil:
+		block.OfImage.CacheControl = cc
+	case block.OfDocument != nil:
+		block.OfDocument.CacheControl = cc
+	case block.OfServerToolUse != nil:
+		block.OfServerToolUse.CacheControl = cc
+	}
 }
 
 // finalizeStep records the end time, duration, and appends the step to the trace.

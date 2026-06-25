@@ -40,5 +40,10 @@ func createClient(config *evaluations.EvalConfig, apiKey, baseURL string, quiet 
 		clientConfig.CacheTTL = config.CacheTTL
 	}
 
+	// Map tool search configuration from YAML to client config
+	if config.EnableToolSearch != nil {
+		clientConfig.EnableToolSearch = config.EnableToolSearch
+	}
+
 	return evaluations.NewEvalClient(clientConfig)
 }

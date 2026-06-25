@@ -34,6 +34,7 @@ type EvalConfig struct {
 	EnablePromptCaching  *bool           `yaml:"enable_prompt_caching,omitempty" json:"enable_prompt_caching,omitempty" jsonschema:"Enable Anthropic prompt caching for tool definitions and system prompts (defaults to true for cost savings)"`
 	CacheTTL             string          `yaml:"cache_ttl,omitempty" json:"cache_ttl,omitempty" jsonschema:"Cache time-to-live: '5m' (default, free) or '1h' (premium). Requires enable_prompt_caching=true"`
 	EnforceMinimumScores *bool           `yaml:"enforce_minimum_scores,omitempty" json:"enforce_minimum_scores,omitempty" jsonschema:"Enforce minimum scores from grading rubrics (defaults to true; set to false to disable)"`
+	EnableToolSearch     *bool           `yaml:"enable_tool_search,omitempty" json:"enable_tool_search,omitempty" jsonschema:"Enable tool search: defer MCP tool schemas and add a BM25 tool-search tool so Claude loads only relevant tools (defaults to true)"`
 	MCPServer            MCPServerConfig `yaml:"mcp_server" json:"mcp_server" jsonschema:"Configuration for the MCP server to evaluate"`
 	Evals                []Eval          `yaml:"evals" json:"evals" jsonschema:"List of evaluation test cases to run"`
 }

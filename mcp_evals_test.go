@@ -3,8 +3,10 @@ package evaluations
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -123,6 +125,395 @@ func TestEvalClient_loadMCPSession_ToolExecution(t *testing.T) {
 	assert.Equal("TEST_VAR", output.Name)
 	assert.Equal("test_value", output.Value)
 	assert.True(output.Set)
+}
+
+func TestEvalClient_buildTools(t *testing.T) {
+	mcpTools := []*mcp.Tool{
+		{Name: "add", Description: "Add two integers"},
+		{Name: "echo", Description: "Echo the input"},
+		{Name: "get_user", Description: "Look up a user profile"},
+	}
+
+	tests := []struct {
+		name             string
+		enableToolSearch *bool
+		enableCaching    *bool
+		mcpTools         []*mcp.Tool
+		wantSearchTool   bool
+		wantDeferLoading bool
+		wantCacheControl bool
+		wantToolCount    int // total entries returned (MCP tools + optional search tool)
+	}{
+		{
+			name:             "defaults defer tools and add search tool",
+			mcpTools:         mcpTools,
+			wantSearchTool:   true,
+			wantDeferLoading: true,
+			wantCacheControl: true,
+			wantToolCount:    len(mcpTools) + 1,
+		},
+		{
+			name:             "tool search disabled sends tools eagerly",
+			enableToolSearch: toPtr(false),
+			mcpTools:         mcpTools,
+			wantSearchTool:   false,
+			wantDeferLoading: false,
+			wantCacheControl: true,
+			wantToolCount:    len(mcpTools),
+		},
+		{
+			name:             "caching disabled omits cache control",
+			enableCaching:    toPtr(false),
+			mcpTools:         mcpTools,
+			wantSearchTool:   true,
+			wantDeferLoading: true,
+			wantCacheControl: false,
+			wantToolCount:    len(mcpTools) + 1,
+		},
+		{
+			name:             "no tools means no search tool",
+			mcpTools:         nil,
+			wantSearchTool:   false,
+			wantDeferLoading: false,
+			wantCacheControl: false,
+			wantToolCount:    0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert := require.New(t)
+
+			client := NewEvalClient(EvalClientConfig{
+				Command:             "go",
+				Args:                []string{"run", "testdata/mcp-test-server/main.go"},
+				EnableToolSearch:    tt.enableToolSearch,
+				EnablePromptCaching: tt.enableCaching,
+			})
+
+			tools := client.buildTools(tt.mcpTools)
+			assert.Len(tools, tt.wantToolCount)
+
+			// Count the deferred MCP tools and the BM25 search tool.
+			var deferredCount int
+			var mcpCount int
+			var searchTool *anthropic.ToolUnionParam
+			for i := range tools {
+				if tools[i].OfTool != nil {
+					mcpCount++
+					if tools[i].OfTool.DeferLoading.Valid() && tools[i].OfTool.DeferLoading.Value {
+						deferredCount++
+					}
+				}
+				if tools[i].OfToolSearchToolBm25_20251119 != nil {
+					searchTool = &tools[i]
+				}
+			}
+
+			assert.Equal(len(tt.mcpTools), mcpCount, "all MCP tools should be present")
+
+			if tt.wantSearchTool {
+				assert.NotNil(searchTool, "BM25 tool-search tool should be appended")
+				// The search tool itself must never be deferred.
+				assert.False(searchTool.OfToolSearchToolBm25_20251119.DeferLoading.Valid())
+			} else {
+				assert.Nil(searchTool, "no tool-search tool should be appended")
+			}
+
+			if tt.wantDeferLoading {
+				assert.Equal(mcpCount, deferredCount, "every MCP tool should be deferred")
+			} else {
+				assert.Zero(deferredCount, "no MCP tool should be deferred")
+			}
+
+			// Exactly one cache breakpoint should exist when caching is enabled,
+			// and it must land on the last tool in the array.
+			var cacheCount int
+			for i := range tools {
+				switch {
+				case tools[i].OfTool != nil && tools[i].OfTool.CacheControl.Type != "":
+					cacheCount++
+				case tools[i].OfToolSearchToolBm25_20251119 != nil && tools[i].OfToolSearchToolBm25_20251119.CacheControl.Type != "":
+					cacheCount++
+				}
+			}
+			if tt.wantCacheControl {
+				assert.Equal(1, cacheCount, "exactly one cache breakpoint expected")
+
+				last := tools[len(tools)-1]
+				var lastCacheSet bool
+				switch {
+				case last.OfTool != nil:
+					lastCacheSet = last.OfTool.CacheControl.Type != ""
+				case last.OfToolSearchToolBm25_20251119 != nil:
+					lastCacheSet = last.OfToolSearchToolBm25_20251119.CacheControl.Type != ""
+				}
+				assert.True(lastCacheSet, "cache control should land on the last tool")
+
+				// When tool search is on, the last tool is the search tool, so the
+				// breakpoint must sit on the search tool rather than an MCP tool.
+				if tt.wantSearchTool {
+					assert.NotNil(last.OfToolSearchToolBm25_20251119, "breakpoint should be on the search tool")
+					assert.NotEmpty(string(last.OfToolSearchToolBm25_20251119.CacheControl.Type))
+				}
+			} else {
+				assert.Zero(cacheCount, "no cache breakpoint expected")
+			}
+
+			// Verify the serialized wire shape matches expectations.
+			payload, err := json.Marshal(tools)
+			assert.NoError(err)
+			serialized := string(payload)
+			assert.Equal(tt.wantSearchTool, strings.Contains(serialized, "tool_search_tool_bm25"))
+			assert.Equal(tt.wantDeferLoading, strings.Contains(serialized, "\"defer_loading\":true"))
+			assert.Equal(tt.wantCacheControl, strings.Contains(serialized, "\"cache_control\""))
+		})
+	}
+}
+
+func TestExtractToolSearches(t *testing.T) {
+	tests := []struct {
+		name        string
+		content     string // JSON array of content blocks for the assistant message
+		wantSearch  []ToolSearch
+		wantNilZero bool // expect no searches returned
+	}{
+		{
+			name: "successful search records query and tools found",
+			content: `[
+				{"type":"text","text":"Let me find a tool."},
+				{"type":"server_tool_use","id":"srvtoolu_1","name":"tool_search_tool_bm25","caller":{"type":"direct"},"input":{"queries":["add two numbers"]}},
+				{"type":"tool_search_tool_result","tool_use_id":"srvtoolu_1","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"add"},{"type":"tool_reference","tool_name":"sum"}]}}
+			]`,
+			wantSearch: []ToolSearch{{
+				ToolUseID:  "srvtoolu_1",
+				ToolName:   "tool_search_tool_bm25",
+				Query:      json.RawMessage(`{"queries":["add two numbers"]}`),
+				ToolsFound: []string{"add", "sum"},
+			}},
+		},
+		{
+			name: "failed search records error",
+			content: `[
+				{"type":"server_tool_use","id":"srvtoolu_2","name":"tool_search_tool_bm25","caller":{"type":"direct"},"input":{"queries":["x"]}},
+				{"type":"tool_search_tool_result","tool_use_id":"srvtoolu_2","content":{"type":"tool_search_tool_result_error","error_code":"unavailable","error_message":"search backend down"}}
+			]`,
+			wantSearch: []ToolSearch{{
+				ToolUseID: "srvtoolu_2",
+				ToolName:  "tool_search_tool_bm25",
+				Query:     json.RawMessage(`{"queries":["x"]}`),
+				Error:     "unavailable: search backend down",
+			}},
+		},
+		{
+			name: "message without tool search returns nothing",
+			content: `[
+				{"type":"text","text":"hello"},
+				{"type":"tool_use","id":"toolu_9","name":"add","input":{"a":1,"b":2}}
+			]`,
+			wantNilZero: true,
+		},
+		{
+			name: "multiple searches preserve order",
+			content: `[
+				{"type":"server_tool_use","id":"srvtoolu_a","name":"tool_search_tool_bm25","caller":{"type":"direct"},"input":{"queries":["first"]}},
+				{"type":"tool_search_tool_result","tool_use_id":"srvtoolu_a","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"alpha"}]}},
+				{"type":"server_tool_use","id":"srvtoolu_b","name":"tool_search_tool_bm25","caller":{"type":"direct"},"input":{"queries":["second"]}},
+				{"type":"tool_search_tool_result","tool_use_id":"srvtoolu_b","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"beta"}]}}
+			]`,
+			wantSearch: []ToolSearch{
+				{ToolUseID: "srvtoolu_a", ToolName: "tool_search_tool_bm25", Query: json.RawMessage(`{"queries":["first"]}`), ToolsFound: []string{"alpha"}},
+				{ToolUseID: "srvtoolu_b", ToolName: "tool_search_tool_bm25", Query: json.RawMessage(`{"queries":["second"]}`), ToolsFound: []string{"beta"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert := require.New(t)
+
+			var message anthropic.Message
+			err := json.Unmarshal([]byte(`{"content":`+tt.content+`}`), &message)
+			assert.NoError(err)
+
+			searches := extractToolSearches(message)
+
+			if tt.wantNilZero {
+				assert.Empty(searches)
+				return
+			}
+
+			assert.Len(searches, len(tt.wantSearch))
+			for i, want := range tt.wantSearch {
+				got := searches[i]
+				assert.Equal(want.ToolUseID, got.ToolUseID)
+				assert.Equal(want.ToolName, got.ToolName)
+				assert.Equal(want.ToolsFound, got.ToolsFound)
+				assert.Equal(want.Error, got.Error)
+				assert.JSONEq(string(want.Query), string(got.Query))
+			}
+		})
+	}
+}
+
+// accumulateStream replays the given stream event JSON payloads into a Message
+// the same way RunEval does, capturing the intact content_block_start payload of
+// any tool_search_tool_result block by index so it can later be repaired.
+func accumulateStream(t *testing.T, events []string) (anthropic.Message, map[int64]string) {
+	t.Helper()
+	assert := require.New(t)
+
+	var message anthropic.Message
+	raws := map[int64]string{}
+	for _, raw := range events {
+		var ev anthropic.MessageStreamEventUnion
+		assert.NoError(json.Unmarshal([]byte(raw), &ev))
+		assert.NoError(message.Accumulate(ev))
+		if start, ok := ev.AsAny().(anthropic.ContentBlockStartEvent); ok {
+			if start.ContentBlock.Type == "tool_search_tool_result" {
+				raws[start.Index] = start.ContentBlock.RawJSON()
+			}
+		}
+	}
+	return message, raws
+}
+
+// TestRepairToolSearchBlocks reproduces the anthropic-sdk-go v1.52.0 streaming
+// bug where accumulation collapses a tool_search_tool_result block into an empty
+// error variant, then verifies that restoring the captured content_block_start
+// payload makes both trace extraction and the message.ToParam history round-trip
+// work again.
+func TestRepairToolSearchBlocks(t *testing.T) {
+	assert := require.New(t)
+
+	events := []string{
+		`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"tool_search_tool_bm25","caller":{"type":"direct"},"input":{"queries":["add"]}}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"content_block_start","index":1,"content_block":{"type":"tool_search_tool_result","tool_use_id":"srvtoolu_1","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"add"}]}}}`,
+		`{"type":"content_block_stop","index":1}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}`,
+		`{"type":"message_stop"}`,
+	}
+
+	message, raws := accumulateStream(t, events)
+
+	// Sanity check: streaming accumulation really does corrupt the block, so the
+	// test exercises the bug rather than a no-op. This is the exact payload the
+	// API rejects with "RequestToolSearchToolResultError.error_code: Field required".
+	before, err := json.Marshal(message.ToParam())
+	assert.NoError(err)
+	assert.Contains(string(before), "tool_search_tool_result_error")
+	assert.Len(raws, 1)
+
+	repairToolSearchBlocks(&message, raws)
+
+	// Trace extraction recovers the surfaced tool references.
+	searches := extractToolSearches(message)
+	assert.Len(searches, 1)
+	assert.Equal([]string{"add"}, searches[0].ToolsFound)
+	assert.Empty(searches[0].Error)
+
+	// The history round-trip now serializes the success variant the API accepts.
+	after, err := json.Marshal(message.ToParam())
+	assert.NoError(err)
+	assert.NotContains(string(after), "tool_search_tool_result_error")
+	assert.Contains(string(after), "tool_search_tool_search_result")
+	assert.Contains(string(after), `"tool_name":"add"`)
+}
+
+// TestRepairToolSearchBlocks_OutOfRange ensures stale or mismatched indexes are
+// ignored rather than panicking.
+func TestRepairToolSearchBlocks_OutOfRange(t *testing.T) {
+	assert := require.New(t)
+
+	var message anthropic.Message
+	assert.NoError(json.Unmarshal([]byte(`{"role":"assistant","content":[{"type":"text","text":"hi"}]}`), &message))
+
+	// Indexes outside the content slice must be skipped without panicking.
+	repairToolSearchBlocks(&message, map[int64]string{-1: "{}", 5: "{}"})
+
+	assert.Len(message.Content, 1)
+	assert.Equal("hi", message.Content[0].Text)
+}
+
+// countMessageCacheBreakpoints reports how many content blocks across all
+// messages carry a cache_control breakpoint, and the index of the last message
+// that carries one (-1 if none).
+func countMessageCacheBreakpoints(messages []anthropic.MessageParam) (count, lastMsgIdx int) {
+	lastMsgIdx = -1
+	for i := range messages {
+		content := messages[i].Content
+		for j := range content {
+			block := content[j]
+			var set bool
+			switch {
+			case block.OfText != nil:
+				set = block.OfText.CacheControl.Type != ""
+			case block.OfToolResult != nil:
+				set = block.OfToolResult.CacheControl.Type != ""
+			case block.OfToolUse != nil:
+				set = block.OfToolUse.CacheControl.Type != ""
+			}
+			if set {
+				count++
+				lastMsgIdx = i
+			}
+		}
+	}
+	return count, lastMsgIdx
+}
+
+func TestApplyRollingCacheBreakpoint(t *testing.T) {
+	assert := require.New(t)
+
+	cc := anthropic.NewCacheControlEphemeralParam()
+
+	// Simulate an agentic loop that grows the message history each step, applying
+	// the rolling breakpoint before each request.
+	messages := []anthropic.MessageParam{
+		anthropic.NewUserMessage(anthropic.NewTextBlock("initial prompt")),
+	}
+
+	applyRollingCacheBreakpoint(messages, cc)
+	count, lastIdx := countMessageCacheBreakpoints(messages)
+	assert.Equal(1, count, "exactly one breakpoint after step 1")
+	assert.Equal(0, lastIdx, "breakpoint on the only message")
+
+	// Step 2: append an assistant turn and a user tool-result turn.
+	messages = append(messages,
+		anthropic.NewAssistantMessage(anthropic.NewTextBlock("calling a tool")),
+		anthropic.NewUserMessage(anthropic.NewToolResultBlock("tool_1", "result data", false)),
+	)
+	applyRollingCacheBreakpoint(messages, cc)
+	count, lastIdx = countMessageCacheBreakpoints(messages)
+	assert.Equal(1, count, "still exactly one breakpoint after step 2 (previous cleared)")
+	assert.Equal(len(messages)-1, lastIdx, "breakpoint moved to the latest message")
+
+	// Step 3: grow again; the single breakpoint should follow the tail.
+	messages = append(messages,
+		anthropic.NewAssistantMessage(anthropic.NewTextBlock("calling another tool")),
+		anthropic.NewUserMessage(anthropic.NewToolResultBlock("tool_2", "more data", false)),
+	)
+	applyRollingCacheBreakpoint(messages, cc)
+	count, lastIdx = countMessageCacheBreakpoints(messages)
+	assert.Equal(1, count, "still exactly one breakpoint after step 3")
+	assert.Equal(len(messages)-1, lastIdx, "breakpoint on the final tool-result message")
+
+	// The breakpoint must land on the last block of the last message.
+	last := messages[len(messages)-1]
+	tail := last.Content[len(last.Content)-1]
+	assert.NotNil(tail.OfToolResult)
+	assert.NotEmpty(string(tail.OfToolResult.CacheControl.Type))
+}
+
+func TestApplyRollingCacheBreakpoint_Empty(t *testing.T) {
+	assert := require.New(t)
+	// Must not panic on empty input or a message with no content blocks.
+	assert.NotPanics(func() {
+		applyRollingCacheBreakpoint(nil, anthropic.NewCacheControlEphemeralParam())
+		applyRollingCacheBreakpoint([]anthropic.MessageParam{{}}, anthropic.NewCacheControlEphemeralParam())
+	})
 }
 
 func TestEvalClient_loadMCPSession_CustomEnv(t *testing.T) {
