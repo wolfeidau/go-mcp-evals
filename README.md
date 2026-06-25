@@ -173,6 +173,10 @@ Evaluation configs support both YAML and JSON formats:
 - `timeout` - Per-evaluation timeout (e.g., "2m", "30s")
 - `max_steps` - Maximum agentic loop iterations (default: 10)
 - `max_tokens` - Maximum tokens per LLM request (default: 4096)
+- `enable_prompt_caching` - Cache tool definitions and system prompts (default: true)
+- `cache_ttl` - Cache time-to-live: "5m" (default, free) or "1h" (premium)
+- `enable_tool_search` - Defer MCP tool schemas and add a BM25 tool-search tool so the model loads only the tools relevant to each prompt (default: true). Set to false to send all tool definitions eagerly.
+- `enforce_minimum_scores` - Fail evals that miss rubric minimum scores (default: true)
 - `mcp_server` - Server command, args, and environment
 - `evals` - List of test cases with name, prompt, and expected result
 

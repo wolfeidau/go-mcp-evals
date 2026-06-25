@@ -55,6 +55,7 @@ type EvalClientConfig struct {
 	MaxTokens            int
 	EnablePromptCaching  *bool             // Optional: enable Anthropic prompt caching for tool definitions and system prompts. Default: true
 	CacheTTL             string            // Optional: cache time-to-live, either "5m" (default) or "1h". Requires EnablePromptCaching=true
+	EnableToolSearch     *bool             // Optional: enable tool search (defer MCP tool schemas and add a BM25 tool-search tool). Default: true
 	EnforceMinimumScores *bool             // Optional: enforce minimum scores from grading rubrics. Default: true
 	StderrCallback       func(line string) // Optional: called for each line written to stderr by the MCP server subprocess
 }
@@ -76,6 +77,9 @@ func (c *EvalClientConfig) ApplyDefaults() *EvalClientConfig {
 	}
 	if c.EnforceMinimumScores == nil {
 		c.EnforceMinimumScores = toPtr(true) // Enable minimum score enforcement by default
+	}
+	if c.EnableToolSearch == nil {
+		c.EnableToolSearch = toPtr(true) // Enable tool search by default to keep the initial prompt small
 	}
 	return c
 }
@@ -241,42 +245,7 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 	trace.ServerInstructions = serverInstructions
 
 	// convert the tools to the format expected by the anthropic model
-	toolParams := make([]anthropic.ToolParam, 0, len(toolsResp.Tools))
-	for _, tool := range toolsResp.Tools {
-		// Convert the MCP tool input schema to Anthropic format
-		var properties map[string]any
-		if tool.InputSchema != nil {
-			// MCP uses JSON Schema, convert to map
-			schemaBytes, _ := json.Marshal(tool.InputSchema)
-			var schema map[string]any
-			if err := json.Unmarshal(schemaBytes, &schema); err == nil {
-				if props, ok := schema["properties"].(map[string]any); ok {
-					properties = props
-				}
-			}
-		}
-
-		toolParam := anthropic.ToolParam{
-			Name:        tool.Name,
-			Description: anthropic.String(tool.Description),
-			InputSchema: anthropic.ToolInputSchemaParam{
-				Properties: properties,
-			},
-		}
-		toolParams = append(toolParams, toolParam)
-	}
-
-	// Add cache control to the last tool definition if caching is enabled
-	// This creates a cache breakpoint after all tools, maximizing cache reuse
-	if ec.cachingEnabled() && len(toolParams) > 0 {
-		lastIdx := len(toolParams) - 1
-		toolParams[lastIdx].CacheControl = ec.newCacheControl()
-	}
-
-	tools := make([]anthropic.ToolUnionParam, len(toolParams))
-	for i, toolParam := range toolParams {
-		tools[i] = anthropic.ToolUnionParam{OfTool: &toolParam}
-	}
+	tools := ec.buildTools(toolsResp.Tools)
 
 	// Initialize message history
 	messages := []anthropic.MessageParam{
@@ -443,6 +412,75 @@ func (ec *EvalClient) RunEval(ctx context.Context, eval Eval) (*EvalRunResult, e
 	trace.TotalDuration = time.Since(overallStart)
 
 	return result, nil
+}
+
+// buildTools converts MCP tools into the tool definitions sent to the model.
+//
+// When tool search is enabled, the MCP tool schemas are marked defer_loading so
+// they are not included in the initial prompt; a non-deferred BM25 tool-search
+// tool is appended so Claude can discover and load only the relevant schemas on
+// demand. When tool search is disabled, every MCP tool is sent eagerly, matching
+// the previous behaviour.
+func (ec *EvalClient) buildTools(mcpTools []*mcp.Tool) []anthropic.ToolUnionParam {
+	toolParams := make([]anthropic.ToolParam, 0, len(mcpTools))
+	for _, tool := range mcpTools {
+		// Convert the MCP tool input schema to Anthropic format
+		var properties map[string]any
+		if tool.InputSchema != nil {
+			// MCP uses JSON Schema, convert to map
+			schemaBytes, _ := json.Marshal(tool.InputSchema)
+			var schema map[string]any
+			if err := json.Unmarshal(schemaBytes, &schema); err == nil {
+				if props, ok := schema["properties"].(map[string]any); ok {
+					properties = props
+				}
+			}
+		}
+
+		toolParams = append(toolParams, anthropic.ToolParam{
+			Name:        tool.Name,
+			Description: anthropic.String(tool.Description),
+			InputSchema: anthropic.ToolInputSchemaParam{
+				Properties: properties,
+			},
+		})
+	}
+
+	// Defer the MCP tool schemas when tool search is enabled. At least one tool
+	// must remain non-deferred (the search tool, appended below), so this only
+	// applies when there are MCP tools to defer.
+	useToolSearch := ec.toolSearchEnabled() && len(toolParams) > 0
+	if useToolSearch {
+		for i := range toolParams {
+			toolParams[i].DeferLoading = anthropic.Bool(true)
+		}
+	}
+
+	tools := make([]anthropic.ToolUnionParam, 0, len(toolParams)+1)
+	for i := range toolParams {
+		tools = append(tools, anthropic.ToolUnionParam{OfTool: &toolParams[i]})
+	}
+
+	if useToolSearch {
+		tools = append(tools, anthropic.ToolUnionParamOfToolSearchToolBm25_20251119(
+			anthropic.ToolSearchToolBm25_20251119TypeToolSearchToolBm25_20251119,
+		))
+	}
+
+	// Place a single cache breakpoint after all tool definitions, on the last
+	// tool in the array (the search tool when tool search is on, otherwise the
+	// last MCP tool), maximizing cache reuse across steps.
+	if ec.cachingEnabled() && len(tools) > 0 {
+		last := &tools[len(tools)-1]
+		switch {
+		case last.OfTool != nil:
+			last.OfTool.CacheControl = ec.newCacheControl()
+		case last.OfToolSearchToolBm25_20251119 != nil:
+			last.OfToolSearchToolBm25_20251119.CacheControl = ec.newCacheControl()
+		}
+	}
+
+	return tools
 }
 
 func (ec *EvalClient) buildAgentSystemPrompt(eval Eval, serverInstructions string) []anthropic.TextBlockParam {
@@ -861,6 +899,11 @@ func toPtr[T any](v T) *T {
 // cachingEnabled returns true if prompt caching is enabled in the config.
 func (ec *EvalClient) cachingEnabled() bool {
 	return ec.config.EnablePromptCaching != nil && *ec.config.EnablePromptCaching
+}
+
+// toolSearchEnabled returns true if tool search is enabled in the config.
+func (ec *EvalClient) toolSearchEnabled() bool {
+	return ec.config.EnableToolSearch != nil && *ec.config.EnableToolSearch
 }
 
 // newCacheControl builds an ephemeral cache control param with the configured TTL.

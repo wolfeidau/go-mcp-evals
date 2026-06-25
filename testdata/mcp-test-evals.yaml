@@ -8,6 +8,10 @@ max_tokens: 4096
 # enable_prompt_caching: true   # Default: true. Set to false to disable caching.
 # cache_ttl: "5m"                # Default: "5m" (free). Options: "5m" or "1h" (premium).
 
+# Tool search defers MCP tool schemas and adds a BM25 tool-search tool so the
+# model loads only the tools relevant to each prompt.
+# enable_tool_search: true       # Default: true. Set to false to send all tools eagerly.
+
 mcp_server:
   command: go
   args:

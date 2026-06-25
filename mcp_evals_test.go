@@ -3,8 +3,10 @@ package evaluations
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -123,6 +125,129 @@ func TestEvalClient_loadMCPSession_ToolExecution(t *testing.T) {
 	assert.Equal("TEST_VAR", output.Name)
 	assert.Equal("test_value", output.Value)
 	assert.True(output.Set)
+}
+
+func TestEvalClient_buildTools(t *testing.T) {
+	mcpTools := []*mcp.Tool{
+		{Name: "add", Description: "Add two integers"},
+		{Name: "echo", Description: "Echo the input"},
+		{Name: "get_user", Description: "Look up a user profile"},
+	}
+
+	tests := []struct {
+		name             string
+		enableToolSearch *bool
+		enableCaching    *bool
+		mcpTools         []*mcp.Tool
+		wantSearchTool   bool
+		wantDeferLoading bool
+		wantCacheControl bool
+		wantToolCount    int // total entries returned (MCP tools + optional search tool)
+	}{
+		{
+			name:             "defaults defer tools and add search tool",
+			mcpTools:         mcpTools,
+			wantSearchTool:   true,
+			wantDeferLoading: true,
+			wantCacheControl: true,
+			wantToolCount:    len(mcpTools) + 1,
+		},
+		{
+			name:             "tool search disabled sends tools eagerly",
+			enableToolSearch: toPtr(false),
+			mcpTools:         mcpTools,
+			wantSearchTool:   false,
+			wantDeferLoading: false,
+			wantCacheControl: true,
+			wantToolCount:    len(mcpTools),
+		},
+		{
+			name:             "caching disabled omits cache control",
+			enableCaching:    toPtr(false),
+			mcpTools:         mcpTools,
+			wantSearchTool:   true,
+			wantDeferLoading: true,
+			wantCacheControl: false,
+			wantToolCount:    len(mcpTools) + 1,
+		},
+		{
+			name:             "no tools means no search tool",
+			mcpTools:         nil,
+			wantSearchTool:   false,
+			wantDeferLoading: false,
+			wantCacheControl: false,
+			wantToolCount:    0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert := require.New(t)
+
+			client := NewEvalClient(EvalClientConfig{
+				Command:             "go",
+				Args:                []string{"run", "testdata/mcp-test-server/main.go"},
+				EnableToolSearch:    tt.enableToolSearch,
+				EnablePromptCaching: tt.enableCaching,
+			})
+
+			tools := client.buildTools(tt.mcpTools)
+			assert.Len(tools, tt.wantToolCount)
+
+			// Count the deferred MCP tools and the BM25 search tool.
+			var deferredCount int
+			var mcpCount int
+			var searchTool *anthropic.ToolUnionParam
+			for i := range tools {
+				if tools[i].OfTool != nil {
+					mcpCount++
+					if tools[i].OfTool.DeferLoading.Valid() && tools[i].OfTool.DeferLoading.Value {
+						deferredCount++
+					}
+				}
+				if tools[i].OfToolSearchToolBm25_20251119 != nil {
+					searchTool = &tools[i]
+				}
+			}
+
+			assert.Equal(len(tt.mcpTools), mcpCount, "all MCP tools should be present")
+
+			if tt.wantSearchTool {
+				assert.NotNil(searchTool, "BM25 tool-search tool should be appended")
+				// The search tool itself must never be deferred.
+				assert.False(searchTool.OfToolSearchToolBm25_20251119.DeferLoading.Valid())
+			} else {
+				assert.Nil(searchTool, "no tool-search tool should be appended")
+			}
+
+			if tt.wantDeferLoading {
+				assert.Equal(mcpCount, deferredCount, "every MCP tool should be deferred")
+			} else {
+				assert.Zero(deferredCount, "no MCP tool should be deferred")
+			}
+
+			// Cache control lands on the last tool in the array.
+			if len(tools) > 0 {
+				last := tools[len(tools)-1]
+				var cacheSet bool
+				switch {
+				case last.OfTool != nil:
+					cacheSet = last.OfTool.CacheControl.Type != ""
+				case last.OfToolSearchToolBm25_20251119 != nil:
+					cacheSet = last.OfToolSearchToolBm25_20251119.CacheControl.Type != ""
+				}
+				assert.Equal(tt.wantCacheControl, cacheSet)
+			}
+
+			// Verify the serialized wire shape matches expectations.
+			payload, err := json.Marshal(tools)
+			assert.NoError(err)
+			serialized := string(payload)
+			assert.Equal(tt.wantSearchTool, strings.Contains(serialized, "tool_search_tool_bm25"))
+			assert.Equal(tt.wantDeferLoading, strings.Contains(serialized, "\"defer_loading\":true"))
+			assert.Equal(tt.wantCacheControl, strings.Contains(serialized, "\"cache_control\""))
+		})
+	}
 }
 
 func TestEvalClient_loadMCPSession_CustomEnv(t *testing.T) {
